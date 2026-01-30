@@ -447,6 +447,122 @@ def webhook_url(calendar_id, host, raw):
         handle_api_error(e, "Get webhook URL")
 
 
+@calendars.command("add-event")
+@click.argument("calendar_id")
+@click.argument("event_id")
+@click.option("--display-order", type=int, help="Display order")
+@click.option("--color", help="Color override")
+@click.option("--host", "-h", help="API host URL")
+@click.option("--raw", is_flag=True, help="Output full JSON")
+def add_event(calendar_id, event_id, display_order, color, host, raw):
+    """Add an event to a calendar (link)."""
+    try:
+        client = get_client(host)
+        result = client.link_event_to_calendar(
+            calendar_id=calendar_id,
+            event_id=event_id,
+            display_order=display_order,
+            color_override=color,
+        )
+        if not raw:
+            click.echo("[OK] Event added to calendar.\n")
+        format_output(result, raw=raw)
+    except Exception as e:
+        handle_api_error(e, "Add event to calendar")
+
+
+@calendars.command("remove-event")
+@click.argument("calendar_id")
+@click.argument("event_id")
+@click.option("--host", "-h", help="API host URL")
+def remove_event(calendar_id, event_id, host):
+    """Remove an event from a calendar (unlink; event is not deleted)."""
+    try:
+        client = get_client(host)
+        client.unlink_event_from_calendar(calendar_id=calendar_id, event_id=event_id)
+        click.echo("[OK] Event removed from calendar.")
+    except Exception as e:
+        handle_api_error(e, "Remove event from calendar")
+
+
+@calendars.command("batch-add-events")
+@click.argument("calendar_id")
+@click.argument("event_ids", nargs=-1, required=True)
+@click.option("--display-order", type=int, help="Display order for all")
+@click.option("--color", help="Color override for all")
+@click.option("--host", "-h", help="API host URL")
+@click.option("--raw", is_flag=True, help="Output full JSON")
+def batch_add_events(calendar_id, event_ids, display_order, color, host, raw):
+    """Add multiple events to a calendar in one request."""
+    try:
+        client = get_client(host)
+        result = client.batch_add_events_to_calendar(
+            calendar_id=calendar_id,
+            event_ids=list(event_ids),
+            display_order=display_order,
+            color_override=color,
+        )
+        if not raw:
+            click.echo(f"[OK] Added {len(result)} event(s) to calendar.\n")
+        format_output(result, raw=raw)
+    except Exception as e:
+        handle_api_error(e, "Batch add events to calendar")
+
+
+@calendars.command("batch-remove-events")
+@click.argument("calendar_id")
+@click.argument("event_ids", nargs=-1, required=True)
+@click.option("--host", "-h", help="API host URL")
+def batch_remove_events(calendar_id, event_ids, host):
+    """Remove multiple events from a calendar (unlink only)."""
+    try:
+        client = get_client(host)
+        result = client.batch_remove_events_from_calendar(
+            calendar_id=calendar_id,
+            event_ids=list(event_ids),
+        )
+        if result:
+            count = result.get("count", len(event_ids))
+            click.echo(f"[OK] Removed {count} event(s) from calendar.")
+    except Exception as e:
+        handle_api_error(e, "Batch remove events from calendar")
+
+
+@calendars.command("update-share")
+@click.argument("calendar_id")
+@click.argument("user_id")
+@click.option("--role", required=True, help="New role: owner, editor, viewer")
+@click.option("--host", "-h", help="API host URL")
+@click.option("--raw", is_flag=True, help="Output full JSON")
+def update_share(calendar_id, user_id, role, host, raw):
+    """Update a shared user's role for a calendar."""
+    try:
+        client = get_client(host)
+        result = client.update_calendar_share_role(calendar_id=calendar_id, user_id=user_id, role=role)
+        if not raw:
+            click.echo(f"[OK] Share role updated to {role}.\n")
+        format_output(result, raw=raw)
+    except Exception as e:
+        handle_api_error(e, "Update share role")
+
+
+@calendars.command()
+@click.argument("calendar_id")
+@click.argument("user_id")
+@click.option("--host", "-h", help="API host URL")
+@click.option("--raw", is_flag=True, help="Output full JSON")
+def unshare(calendar_id, user_id, host, raw):
+    """Remove an AnyMoment share for a calendar (user loses access unless linked via Google)."""
+    try:
+        client = get_client(host)
+        result = client.unshare_calendar(calendar_id=calendar_id, user_id=user_id)
+        if not raw:
+            click.echo("[OK] Calendar unshared from user.\n")
+        format_output(result, raw=raw)
+    except Exception as e:
+        handle_api_error(e, "Unshare calendar")
+
+
 def _default_agenda_start_iso() -> str:
     """Default agenda window start: today 00:00 in default timezone, as UTC ISO."""
     tz_str = get_default_timezone()

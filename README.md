@@ -2,6 +2,8 @@
 
 Python SDK and command-line interface for the [AnyMoment API](https://api.anymoment.sineways.tech) - Create and manage recurring calendar events with natural language.
 
+**📖 [Full documentation (Python SDK & CLI)](https://anymoment.sineways.tech/anymoment-python/docs)** — installation, quick start, all CLI commands, and Library API reference.
+
 ## Features
 
 - 🎯 **Natural Language Event Creation** - Create complex recurring events from simple text
@@ -139,8 +141,22 @@ anymoment calendars update <id> [--name NAME] [--description TEXT] [--timezone T
 # Delete calendar
 anymoment calendars delete <id>
 
-# Share calendar
+# Share calendar with another user (set role: owner, editor, viewer)
 anymoment calendars share <id> <user-id> [--role ROLE]
+
+# Update a shared user's role
+anymoment calendars update-share <id> <user-id> --role ROLE
+
+# Remove share (user loses access unless linked via Google)
+anymoment calendars unshare <id> <user-id>
+
+# Add / remove events to or from a calendar (link or unlink)
+anymoment calendars add-event <calendar-id> <event-id> [--display-order N] [--color COLOR]
+anymoment calendars remove-event <calendar-id> <event-id>
+
+# Batch add or remove events to or from a calendar
+anymoment calendars batch-add-events <calendar-id> <event-id> [<event-id> ...] [--display-order N] [--color COLOR]
+anymoment calendars batch-remove-events <calendar-id> <event-id> [<event-id> ...]
 
 # Get webhook URL
 anymoment calendars webhook-url <id>
@@ -177,6 +193,16 @@ anymoment events next <id>
 
 # Export instances
 anymoment events export <id> [--format ics|csv] [--from DATE] [--to DATE] [--out FILE]
+```
+
+### Agenda & Search
+
+```bash
+# List events and instances in a time window (agenda)
+anymoment agenda list [--start ISO] [--end ISO] [--calendar ID] [--no-cache] [--webhooks]
+
+# Fuzzy search events by name (optional time window and filters)
+anymoment agenda search <query> [--start ISO] [--end ISO] [--calendar ID] [--active/--inactive] [--limit N] [--offset N] [--no-instances]
 ```
 
 ### Users
@@ -217,7 +243,9 @@ client = Client(api_url="https://api.anymoment.sineways.tech", token="optional-t
 - `client.create_calendar(name, description=None, timezone="UTC", color=None)` - Create calendar
 - `client.update_calendar(calendar_id, name=None, description=None, timezone=None, color=None, is_active=None)` - Update calendar
 - `client.delete_calendar(calendar_id)` - Delete calendar
-- `client.share_calendar(calendar_id, user_id, role="viewer")` - Share calendar
+- `client.share_calendar(calendar_id, user_id, role="viewer")` - Share calendar with a user (set permissions)
+- `client.update_calendar_share_role(calendar_id, user_id, role)` - Update a shared user's role (owner, editor, viewer)
+- `client.unshare_calendar(calendar_id, user_id)` - Remove an AnyMoment share for a calendar
 - `client.get_calendar_webhook_url(calendar_id)` - Get webhook URL
 
 #### Events
@@ -231,10 +259,17 @@ client = Client(api_url="https://api.anymoment.sineways.tech", token="optional-t
 - `client.get_event_instances(event_id, from_date=None, to_date=None, optimized=False)` - Get event instances
 - `client.get_next_event_instance(event_id)` - Get next instance
 
-#### Calendar-Event Links
+#### Agenda & Search
 
-- `client.link_event_to_calendar(calendar_id, event_id, display_order=None, color_override=None)` - Link event to calendar
-- `client.unlink_event_from_calendar(calendar_id, event_id)` - Unlink event from calendar
+- `client.get_agenda(start, end, calendar_ids=None, use_cache=True, include_webhooks=False)` - Get events and their instances within a time window (agenda)
+- `client.search_events(q, start=None, end=None, calendar_ids=None, is_active=None, limit=50, offset=0, include_instances=True)` - Fuzzy search events by name (optional time window and filters)
+
+#### Calendar-Event Links (add / remove events to or from calendars)
+
+- `client.link_event_to_calendar(calendar_id, event_id, display_order=None, color_override=None)` - Add one event to a calendar
+- `client.unlink_event_from_calendar(calendar_id, event_id)` - Remove one event from a calendar (unlink only; event is not deleted)
+- `client.batch_add_events_to_calendar(calendar_id, event_ids, display_order=None, color_override=None)` - Add multiple events to a calendar in one request
+- `client.batch_remove_events_from_calendar(calendar_id, event_ids)` - Remove multiple events from a calendar (unlink only)
 
 ## Examples
 
@@ -293,6 +328,31 @@ instances = client.get_event_instances(
 # Get next instance
 next_instance = client.get_next_event_instance(event["id"])
 print(f"Next occurrence: {next_instance}")
+```
+
+### Agenda & Search
+
+```python
+# Get events and instances in a time window (agenda)
+items = client.get_agenda(
+    start="2026-01-01T00:00:00Z",
+    end="2026-01-31T23:59:59Z",
+    calendar_ids=[calendar["id"]],
+    use_cache=True,
+)
+for item in items:
+    print(item["event"]["name"], item["instances"])
+
+# Fuzzy search events by name
+results = client.search_events(
+    q="team meeting",
+    start="2026-01-01T00:00:00Z",
+    end="2026-03-31T23:59:59Z",
+    limit=20,
+    include_instances=True,
+)
+for item in results:
+    print(item["event"]["name"], item.get("score"), item.get("instances"))
 ```
 
 ## Error Handling
@@ -362,9 +422,10 @@ MIT License - see [LICENSE](LICENSE) file for details.
 
 ## Support
 
-- **Documentation**: https://docs.anymoment.ai
+- **Python SDK & CLI docs**: [https://anymoment.sineways.tech/anymoment-python/docs](https://anymoment.sineways.tech/anymoment-python/docs)
+- **AnyMoment docs**: https://docs.anymoment.ai
 - **API Base URL**: https://api.anymoment.sineways.tech
-- **Issues**: https://github.com/sineways/anymoment-python/issues
+- **Issues**: https://github.com/SinewaysTechnology/anymoment-python/issues
 
 ## Contributing
 

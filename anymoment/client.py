@@ -351,7 +351,21 @@ class Client:
             "role": role,
         }
         return self._request("POST", f"/calendars/{calendar_id}/share", json_data=data)
-    
+
+    def update_calendar_share_role(
+        self,
+        calendar_id: str,
+        user_id: str,
+        role: str,
+    ) -> Dict[str, Any]:
+        """Update a shared user's role for a calendar (owner, editor, viewer)."""
+        data = {"role": role}
+        return self._request("PUT", f"/calendars/{calendar_id}/share/{user_id}", json_data=data)
+
+    def unshare_calendar(self, calendar_id: str, user_id: str) -> Dict[str, Any]:
+        """Remove an AnyMoment share for a calendar (user loses access unless linked via Google)."""
+        return self._request("DELETE", f"/calendars/{calendar_id}/share/{user_id}")
+
     def get_calendar_webhook_url(self, calendar_id: str) -> dict[str, Any]:
         """Get webhook URL for a calendar."""
         return self._request("GET", f"/calendars/{calendar_id}/webhook-url")
@@ -451,7 +465,34 @@ class Client:
         return self._request("GET", f"/events/{event_id}/next-instance")
     
     # Calendar-Event Link methods
-    
+
+    def batch_add_events_to_calendar(
+        self,
+        calendar_id: str,
+        event_ids: List[str],
+        display_order: Optional[int] = None,
+        color_override: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Add multiple events to a calendar in one request."""
+        data: Dict[str, Any] = {"event_ids": event_ids}
+        if display_order is not None:
+            data["display_order"] = display_order
+        if color_override is not None:
+            data["color_override"] = color_override
+        return self._request("POST", f"/calendars/{calendar_id}/events", json_data=data)
+
+    def batch_remove_events_from_calendar(
+        self,
+        calendar_id: str,
+        event_ids: List[str],
+    ) -> Dict[str, Any]:
+        """Remove multiple events from a calendar (unlink only; events are not deleted)."""
+        return self._request(
+            "POST",
+            f"/calendars/{calendar_id}/events/batch-unlink",
+            json_data={"event_ids": event_ids},
+        )
+
     def link_event_to_calendar(
         self,
         calendar_id: str,
@@ -470,7 +511,7 @@ class Client:
             f"/calendars/{calendar_id}/events/{event_id}",
             json_data=data,
         )
-    
+
     def unlink_event_from_calendar(
         self,
         calendar_id: str,
