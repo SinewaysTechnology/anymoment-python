@@ -1,0 +1,60 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "anymoment"
+version = "0.1.0"
+description = "Python SDK and CLI for AnyMoment API - Create and manage your schedule with natural language, write moments the way you think them."
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+authors = [
+    {name = "David Jonas @ Sineways Technology", email = "info@sineways.tech"}
+]
+keywords = ["calendar", "recurring-events", "scheduling", "api", "cli", "anymoment"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Office/Business :: Scheduling",
+]
+
+dependencies = [
+    "requests>=2.28.0",
+    "pyjwt>=2.8.0",
+    "cryptography>=41.0.0",
+    "python-dateutil>=2.8.0",
+]
+
+[project.optional-dependencies]
+cli = [
+    "click>=8.0.0",
+]
+
+[project.scripts]
+anymoment = "anymoment.cli.commands:cli"
+
+[project.urls]
+Homepage = "https://anymoment.sineways.tech"
+Documentation = "https://anymoment.sineways.tech/anymoment-python/docs"
+Repository = "https://github.com/SinewaysTechnology/anymoment-python"
+Issues = "https://github.com/SinewaysTechnology/anymoment-python/issues"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["anymoment*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
