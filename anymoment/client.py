@@ -419,7 +419,7 @@ class Client:
             data["description"] = description
         if calendar_id is not None:
             data["calendar_id"] = calendar_id
-        return self._request("POST", "/events/from-text", json_data=data)
+        return self._request("POST", "/events/from-recurrence-text", json_data=data)
     
     def update_event(
         self,
