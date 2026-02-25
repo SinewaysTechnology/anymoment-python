@@ -398,6 +398,26 @@ class Client:
         """Get a specific event by ID."""
         return self._request("GET", f"/events/{event_id}")
     
+    def extract_and_create_events(
+        self,
+        text: str,
+        context: Optional[str] = None,
+        timezone: str = "UTC",
+        model: str = "high",
+        calendar_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Extract events from free-form text and create them (POST /events/extract)."""
+        data: Dict[str, Any] = {
+            "text": text,
+            "timezone": timezone,
+            "model": model,
+        }
+        if context is not None:
+            data["context"] = context
+        if calendar_id is not None:
+            data["calendar_id"] = calendar_id
+        return self._request("POST", "/events/extract", json_data=data)
+    
     def create_event_from_text(
         self,
         recurrence_text: str,
@@ -427,13 +447,35 @@ class Client:
         name: Optional[str] = None,
         description: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Update an event."""
+        """Update an event (name/description only)."""
         data = {}
         if name is not None:
             data["name"] = name
         if description is not None:
             data["description"] = description
         return self._request("PUT", f"/events/{event_id}", json_data=data)
+    
+    def update_event_from_text(
+        self,
+        event_id: str,
+        recurrence_text: str,
+        name: str,
+        description: Optional[str] = None,
+        timezone: str = "UTC",
+        model: str = "high",
+    ) -> Dict[str, Any]:
+        """Update an event from natural language recurrence (PUT /events/{id}/from-recurrence-text)."""
+        data: Dict[str, Any] = {
+            "recurrence_text": recurrence_text,
+            "name": name,
+            "timezone": timezone,
+            "model": model,
+        }
+        if description is not None:
+            data["description"] = description
+        return self._request(
+            "PUT", f"/events/{event_id}/from-recurrence-text", json_data=data
+        )
     
     def delete_event(self, event_id: str) -> None:
         """Delete an event."""

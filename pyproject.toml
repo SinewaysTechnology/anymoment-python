@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "anymoment"
-version = "0.1.0"
+version = "1.0.0"
 description = "Python SDK and CLI for AnyMoment API - Create and manage your schedule with natural language, write moments the way you think them."
 readme = "README.md"
 requires-python = ">=3.8"
@@ -14,7 +14,7 @@ authors = [
 ]
 keywords = ["calendar", "recurring-events", "scheduling", "api", "cli", "anymoment"]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 5 - Production/Stable",
     "Environment :: Console",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",

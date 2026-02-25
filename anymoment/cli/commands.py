@@ -2,12 +2,14 @@
 
 import json
 import sys
+import uuid
 from datetime import date, datetime, time
 from typing import Any, Optional
 
 import click
 from dateutil import tz as dateutil_tz
 
+from anymoment import __version__
 from anymoment.client import Client
 from anymoment.config import (
     get_api_url,
@@ -37,6 +39,37 @@ def get_client(host=None, require_auth=True):
             sys.exit(2)
     
     return client
+
+
+def resolve_calendar_id(client, calendar_ref: Optional[str]):
+    """Resolve calendar by name or ID. Returns calendar ID or None if no ref and no default. Exits on error if ref given but not found or ambiguous."""
+    if calendar_ref is None or calendar_ref.strip() == "":
+        return get_default_calendar_id()
+    ref = calendar_ref.strip()
+    # Treat as UUID if it looks like one (hex + optional hyphens)
+    try:
+        uuid.UUID(ref)
+        return ref
+    except (ValueError, AttributeError, TypeError):
+        pass
+    # Resolve by name (case-insensitive exact match)
+    calendars = client.list_calendars()
+    name_lower = ref.lower()
+    matches = [c for c in calendars if (c.get("name") or "").strip().lower() == name_lower]
+    if not matches:
+        click.echo(f"[ERROR] No calendar found with name '{ref}'. Use 'anymoment calendars list' to see calendars.", err=True)
+        sys.exit(1)
+    if len(matches) > 1:
+        click.echo(f"[ERROR] Multiple calendars match '{ref}'. Use calendar ID instead.", err=True)
+        sys.exit(1)
+    return matches[0].get("id")
+
+
+def resolve_calendar_ids(client, calendar_ref: Optional[str]):
+    """Resolve comma-separated calendar names/IDs to a list of calendar IDs. Returns None if ref is empty."""
+    if not calendar_ref or not calendar_ref.strip():
+        return None
+    return [resolve_calendar_id(client, c.strip()) for c in calendar_ref.split(",")]
 
 
 def handle_api_error(e, context="Operation"):
@@ -160,7 +193,7 @@ def format_output(data, raw=False, pipe=False):
 
 
 @click.group()
-@click.version_option(version="0.1.0")
+@click.version_option(version=__version__)
 def cli():
     """AnyMoment CLI - Manage calendars and events."""
     pass
@@ -298,6 +331,88 @@ def show():
     }
     click.echo("Current configuration:\n")
     format_output(config)
+
+
+@cli.command()
+@click.argument("text")
+@click.option("--calendar", "-c", default=None, help="Calendar name or ID (defaults to config default)")
+@click.option("--context", default=None, help="Optional context about the text source")
+@click.option("--timezone", "-z", default=None, help="Timezone for extracted events (defaults to config or UTC)")
+@click.option("--model", default="high", type=click.Choice(["high", "low", "mega"]), help="Model: high, low, mega")
+@click.option("--host", "-h", help="API host URL")
+@click.option("--raw", is_flag=True, help="Output full JSON response")
+def create(text, calendar, context, timezone, model, host, raw):
+    """Create events from free-form text (extract + create in one step)."""
+    try:
+        client = get_client(host)
+        cal_id = resolve_calendar_id(client, calendar)
+        tz = timezone or get_default_timezone()
+        result = client.extract_and_create_events(
+            text=text,
+            context=context,
+            timezone=tz,
+            model=model,
+            calendar_id=cal_id,
+        )
+        if raw:
+            format_output(result, raw=True)
+            return
+        summary = result.get("summary") or {}
+        total = summary.get("total_extracted", 0)
+        created = summary.get("successfully_created", 0)
+        failed = summary.get("failed_to_create", 0)
+        click.echo(f"[OK] Extracted {total} event(s), created {created}, failed {failed}.")
+        for cr in result.get("created_events") or []:
+            ev = (cr.get("extracted_event") or {}).get("name", "?")
+            eid = cr.get("event_id")
+            if cr.get("success") and eid:
+                click.echo(f"  Created: {ev} ({eid})")
+            else:
+                click.echo(f"  Failed:  {ev} — {cr.get('error_message', 'unknown')}")
+    except Exception as e:
+        handle_api_error(e, "Create events")
+
+
+@cli.command()
+@click.argument("event_id")
+@click.option("--when", "-w", default=None, help="New recurrence/schedule (natural language)")
+@click.option("--title", "-t", default=None, help="New event title/name")
+@click.option("--description", "-d", default=None, help="New event description")
+@click.option("--timezone", "-z", default=None, help="Timezone for recurrence (defaults to config or UTC)")
+@click.option("--model", default="high", type=click.Choice(["high", "low", "mega"]), help="Model for --when parsing")
+@click.option("--host", "-h", help="API host URL")
+@click.option("--raw", is_flag=True, help="Output full JSON")
+def update(event_id, when, title, description, timezone, model, host, raw):
+    """Update an event (schedule, title, and/or description). At least one of --when, --title, --description required."""
+    if not any([when, title, description]):
+        click.echo("[ERROR] Provide at least one of: --when, --title, --description", err=True)
+        sys.exit(1)
+    try:
+        client = get_client(host)
+        tz = timezone or get_default_timezone()
+        if when is not None:
+            ev = client.get_event(event_id)
+            current_name = ev.get("name") or ev.get("display_name") or "Event"
+            current_desc = ev.get("description")
+            event = client.update_event_from_text(
+                event_id=event_id,
+                recurrence_text=when,
+                name=title if title is not None else current_name,
+                description=description if description is not None else current_desc,
+                timezone=tz,
+                model=model,
+            )
+        else:
+            event = client.update_event(
+                event_id=event_id,
+                name=title,
+                description=description,
+            )
+        if not raw:
+            click.echo("[OK] Event updated successfully!\n")
+        format_output(event, raw=raw)
+    except Exception as e:
+        handle_api_error(e, "Update event")
 
 
 @cli.group()
@@ -590,7 +705,7 @@ def agenda():
 @agenda.command("list")
 @click.option("--start", "-s", default=None, help="Start of window (ISO 8601, e.g. 2025-02-03T00:00:00Z)")
 @click.option("--end", "-e", default=None, help="End of window (ISO 8601)")
-@click.option("--calendar", "-c", default=None, help="Restrict to calendar ID(s); comma-separated for multiple")
+@click.option("--calendar", "-c", default=None, help="Restrict to calendar name(s) or ID(s); comma-separated for multiple")
 @click.option("--no-cache", is_flag=True, help="Do not use instance cache")
 @click.option("--webhooks", is_flag=True, help="Include webhooks in event payloads")
 @click.option("--host", "-h", help="API host URL")
@@ -601,8 +716,8 @@ def agenda_list(start, end, calendar, no_cache, webhooks, host, raw, pipe):
     try:
         start_iso = start if start is not None else _default_agenda_start_iso()
         end_iso = end if end is not None else _default_agenda_end_iso()
-        calendar_ids = [x.strip() for x in calendar.split(",")] if calendar else None
         client = get_client(host)
+        calendar_ids = resolve_calendar_ids(client, calendar)
         items = client.get_agenda(
             start=start_iso,
             end=end_iso,
@@ -621,7 +736,7 @@ def agenda_list(start, end, calendar, no_cache, webhooks, host, raw, pipe):
 @click.argument("query")
 @click.option("--start", "-s", default=None, help="Only events with instance on or after this time (ISO 8601)")
 @click.option("--end", "-e", default=None, help="Only events with instance on or before this time (ISO 8601)")
-@click.option("--calendar", "-c", default=None, help="Restrict to calendar ID(s); comma-separated for multiple")
+@click.option("--calendar", "-c", default=None, help="Restrict to calendar name(s) or ID(s); comma-separated for multiple")
 @click.option("--active/--inactive", default=None, help="Filter by active status")
 @click.option("--limit", "-l", type=int, default=50, help="Max results (1-100)")
 @click.option("--offset", type=int, default=0, help="Skip this many results")
@@ -632,8 +747,8 @@ def agenda_list(start, end, calendar, no_cache, webhooks, host, raw, pipe):
 def agenda_search(query, start, end, calendar, active, limit, offset, no_instances, host, raw, pipe):
     """Fuzzy search events by name (optional time window and filters)."""
     try:
-        calendar_ids = [x.strip() for x in calendar.split(",")] if calendar else None
         client = get_client(host)
+        calendar_ids = resolve_calendar_ids(client, calendar)
         items = client.search_events(
             q=query,
             start=start,
@@ -659,44 +774,57 @@ def events():
 
 @events.command()
 @click.argument("text")
-@click.option("--name", help="Event name (extracted from text if not provided)")
-@click.option("--description", help="Event description")
+@click.option("--name", help="Event name hint (extracted from text if not provided)")
+@click.option("--description", help="Event description hint")
 @click.option("--timezone", "-z", default=None, help="Event timezone (defaults to config or UTC)")
-@click.option("--calendar", "-c", default=None, help="Calendar ID (defaults to config default)")
+@click.option("--calendar", "-c", default=None, help="Calendar name or ID (defaults to config default)")
 @click.option("--model", default="high", type=click.Choice(["high", "low", "mega"]), help="Model: high, low, mega")
 @click.option("--host", "-h", help="API host URL")
 @click.option("--raw", is_flag=True, help="Output full JSON")
 def create(
     text, name, description, timezone, calendar, model, host, raw
 ):
-    """Create an event from natural language."""
+    """Create events from free-form text (extract + create; same as top-level 'anymoment create')."""
     try:
         client = get_client(host)
-        # Use defaults from config if not provided
+        cal_id = resolve_calendar_id(client, calendar)
         tz = timezone or get_default_timezone()
-        cal_id = calendar or get_default_calendar_id()
-        
-        # Don't show calendar ID if using default - it's expected behavior
-        
-        event = client.create_event_from_text(
-            recurrence_text=text,
-            name=name,
-            description=description,
+        context = None
+        if name or description:
+            parts = []
+            if name:
+                parts.append(f"Name: {name}")
+            if description:
+                parts.append(f"Description: {description}")
+            context = "\n".join(parts)
+        result = client.extract_and_create_events(
+            text=text,
+            context=context,
             timezone=tz,
-            calendar_id=cal_id,
             model=model,
+            calendar_id=cal_id,
         )
-        if not raw:
-            click.echo("[OK] Event created successfully!\n")
-        format_output(event, raw=raw)
-        if not raw:
-            click.echo(f"\n  Event ID: {event.get('id', 'N/A')}")
+        if raw:
+            format_output(result, raw=True)
+            return
+        summary = result.get("summary") or {}
+        total = summary.get("total_extracted", 0)
+        created = summary.get("successfully_created", 0)
+        failed = summary.get("failed_to_create", 0)
+        click.echo(f"[OK] Extracted {total} event(s), created {created}, failed {failed}.")
+        for cr in result.get("created_events") or []:
+            ev = (cr.get("extracted_event") or {}).get("name", "?")
+            eid = cr.get("event_id")
+            if cr.get("success") and eid:
+                click.echo(f"  Created: {ev} ({eid})")
+            else:
+                click.echo(f"  Failed:  {ev} — {cr.get('error_message', 'unknown')}")
     except Exception as e:
         handle_api_error(e, "Create event")
 
 
 @events.command()
-@click.option("--calendar", "-c", default=None, help="Calendar ID (defaults to config default)")
+@click.option("--calendar", "-c", default=None, help="Calendar name or ID (defaults to config default)")
 @click.option("--active/--inactive", default=None, help="Filter by active status")
 @click.option("--limit", "-l", type=int, help="Maximum number of results")
 @click.option("--offset", "-s", type=int, help="Number of results to skip")
@@ -708,9 +836,7 @@ def list(calendar, active, limit, offset, minimal, host, raw, pipe):
     """List events."""
     try:
         client = get_client(host)
-        # Use default calendar from config if not provided
-        cal_id = calendar or get_default_calendar_id()
-        
+        cal_id = resolve_calendar_id(client, calendar)
         events = client.list_events(
             calendar_id=cal_id,
             is_active=active,
@@ -741,15 +867,41 @@ def get(event_id, host, raw):
 
 @events.command()
 @click.argument("event_id")
-@click.option("--name", help="Event name")
-@click.option("--description", help="Event description")
+@click.option("--when", "-w", default=None, help="New recurrence/schedule (natural language)")
+@click.option("--title", "-t", default=None, help="New event title/name")
+@click.option("--name", default=None, help="New event name (same as --title)")
+@click.option("--description", "-d", default=None, help="New event description")
+@click.option("--timezone", "-z", default=None, help="Timezone for recurrence (defaults to config or UTC)")
+@click.option("--model", default="high", type=click.Choice(["high", "low", "mega"]), help="Model for --when parsing")
 @click.option("--host", "-h", help="API host URL")
 @click.option("--raw", is_flag=True, help="Output full JSON")
-def update(event_id, name, description, host, raw):
-    """Update an event."""
+def update(event_id, when, title, name, description, timezone, model, host, raw):
+    """Update an event (schedule, title, and/or description). Same as top-level 'anymoment update'."""
+    title_or_name = title if title is not None else name
+    if not any([when, title_or_name, description]):
+        click.echo("[ERROR] Provide at least one of: --when, --title/--name, --description", err=True)
+        sys.exit(1)
     try:
         client = get_client(host)
-        event = client.update_event(event_id, name=name, description=description)
+        tz = timezone or get_default_timezone()
+        if when is not None:
+            ev = client.get_event(event_id)
+            current_name = ev.get("name") or ev.get("display_name") or "Event"
+            current_desc = ev.get("description")
+            event = client.update_event_from_text(
+                event_id=event_id,
+                recurrence_text=when,
+                name=title_or_name if title_or_name is not None else current_name,
+                description=description if description is not None else current_desc,
+                timezone=tz,
+                model=model,
+            )
+        else:
+            event = client.update_event(
+                event_id=event_id,
+                name=title_or_name,
+                description=description,
+            )
         if not raw:
             click.echo("[OK] Event updated successfully!\n")
         format_output(event, raw=raw)
