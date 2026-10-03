@@ -1,0 +1,34 @@
+name: Auto-assign PR
+
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review]
+
+permissions:
+  pull-requests: write
+
+jobs:
+  assign-and-review:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Assign PR and request review
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          REPO: ${{ github.repository }}
+          REVIEWER: davidjonas
+        run: |
+          echo "PR #$PR_NUMBER by $PR_AUTHOR"
+          
+          # Assign davidjonas to the PR
+          gh pr edit "$PR_NUMBER" --repo "$REPO" --add-assignee "$REVIEWER"
+          echo "Assigned $REVIEWER to PR #$PR_NUMBER"
+          
+          # Request review from davidjonas (skip if author is davidjonas)
+          if [ "$PR_AUTHOR" != "$REVIEWER" ]; then
+            gh pr edit "$PR_NUMBER" --repo "$REPO" --add-reviewer "$REVIEWER"
+            echo "Requested review from $REVIEWER for PR #$PR_NUMBER"
+          else
+            echo "Skipping review request: author is $REVIEWER (cannot self-review)"
+          fi
