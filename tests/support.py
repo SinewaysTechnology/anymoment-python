@@ -12,17 +12,14 @@ import pytest
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 API = "https://api.test.anymoment"
 
-# CLI exit codes the 2.0 command surface uses.
+# CLI exit codes. A successful payload that includes warnings or failures is 0.
 EXIT_OK = 0
 EXIT_USAGE = 2
 EXIT_AUTH = 3
 EXIT_NOT_FOUND = 4
-EXIT_VALIDATION = 5
-EXIT_PERMISSION = 6
-EXIT_RATE_LIMIT = 7
-EXIT_PARTIAL = 8
-EXIT_UPSTREAM = 9
-EXIT_NETWORK = 10
+EXIT_CONFLICT = 5
+EXIT_RATE_LIMIT = 6
+EXIT_REMOTE = 7
 
 EVENT_ID = "660e8400-e29b-41d4-a716-446655440001"
 CALENDAR_ID = "550e8400-e29b-41d4-a716-446655440000"

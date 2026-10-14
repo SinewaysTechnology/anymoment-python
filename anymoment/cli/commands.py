@@ -1,6 +1,8 @@
 """CLI commands for AnyMoment."""
 
+import builtins
 import json
+import os
 import sys
 import uuid
 from datetime import date, datetime, time
@@ -10,6 +12,18 @@ import click
 from dateutil import tz as dateutil_tz
 
 from anymoment import __version__
+from anymoment.cli.exitcodes import EXIT_AUTH, EXIT_CODE_NAMES, EXIT_USAGE
+from anymoment.cli.group import AgendaGroup, AnyMomentGroup
+from anymoment.cli.idempotency import lookup as lookup_idempotency
+from anymoment.cli.idempotency import store as store_idempotency
+from anymoment.cli.state import (
+    confirmed,
+    dry_run,
+    emit,
+    fail,
+    idempotency_key,
+    machine,
+)
 from anymoment.client import Client
 from anymoment.config import (
     get_api_url,
@@ -18,7 +32,8 @@ from anymoment.config import (
     get_default_timezone,
     set_config,
 )
-from anymoment.exceptions import AuthenticationError, AnyMomentException
+from anymoment.dates import DateParseError, resolve_window
+from anymoment.exceptions import AuthenticationError
 from anymoment.token_manager import (
     clear_all_tokens,
     delete_token,
@@ -30,14 +45,18 @@ from anymoment.token_manager import (
 def get_client(host=None, require_auth=True):
     """Get a configured client instance."""
     api_url = host or get_api_url()
-    client = Client(api_url=api_url)
-    
-    if require_auth:
-        token = get_token(api_url)
-        if not token:
-            click.echo("[ERROR] Not authenticated. Please run 'anymoment auth login' first.", err=True)
-            sys.exit(2)
-    
+    token = os.environ.get("ANYMOMENT_TOKEN") or get_token(api_url)
+    client = Client(api_url=api_url, token=token)
+
+    if require_auth and not token:
+        fail(
+            AuthenticationError(
+                "Not authenticated. Run 'anymoment auth login' or set ANYMOMENT_TOKEN.",
+                user_message="Not authenticated.",
+                next_step="Run 'anymoment auth login' or set ANYMOMENT_TOKEN.",
+            )
+        )
+
     return client
 
 
@@ -73,30 +92,68 @@ def resolve_calendar_ids(client, calendar_ref: Optional[str]):
 
 
 def handle_api_error(e, context="Operation"):
-    """Handle API errors with helpful messages."""
-    # Check exception type safely
-    try:
-        if isinstance(e, AuthenticationError):
-            click.echo(f"[ERROR] Authentication failed: {e.message}", err=True)
-            click.echo("   Run 'anymoment auth login' to authenticate.", err=True)
-            sys.exit(2)
-        elif isinstance(e, AnyMomentException):
-            click.echo(f"[ERROR] {context} failed: {e.message}", err=True)
-            if hasattr(e, 'details') and e.details:
-                for key, value in e.details.items():
-                    click.echo(f"   {key}: {value}", err=True)
-            sys.exit(1)
+    """Handle API errors with a stable exit code and a stderr payload."""
+    fail(e, context)
+
+
+def _agenda_parts(items):
+    """Accept an AgendaResult, a {events, failures} dict, or a legacy list."""
+    # `list` is a Click command in this module, so the builtin is explicit.
+    items_type = builtins.list
+    if isinstance(items, dict) and "events" in items:
+        return items_type(items.get("events") or []), items_type(items.get("failures") or [])
+    if isinstance(items, items_type):
+        return items, []
+    events = getattr(items, "events", None)
+    failures = getattr(items, "failures", None)
+    if events is not None:
+        return items_type(events or []), items_type(failures or [])
+    return [], []
+
+
+def _warnings_of(result):
+    if isinstance(result, dict):
+        return result.get("sync_warnings") or result.get("google_export_warnings") or []
+    return getattr(result, "sync_warnings", None) or getattr(result, "google_export_warnings", None) or []
+
+
+def _finish_mutation(result, ok_text: str):
+    """Print a mutation. Machine output is the body. A repeat key replays it."""
+    if machine():
+        text = emit(result)
+    else:
+        click.echo(ok_text)
+        for warning in _warnings_of(result):
+            message = warning.get("user_message") if isinstance(warning, dict) else getattr(warning, "user_message", "")
+            step = warning.get("next_step") if isinstance(warning, dict) else getattr(warning, "next_step", "")
+            if message:
+                click.echo(message)
+            if step:
+                click.echo(step)
+        text = ok_text
+    store_idempotency(idempotency_key(), text)
+
+
+def _replay_or_dry_run(op: str, target: str) -> bool:
+    """Stop when this call is a dry run or a replay of a previous key."""
+    if dry_run():
+        if machine():
+            emit({"dry_run": True, "op": op, "target": target})
         else:
-            click.echo(f"[ERROR] {context} failed: {str(e)}", err=True)
-            sys.exit(1)
-    except TypeError:
-        # Fallback if isinstance fails (shouldn't happen, but be safe)
-        click.echo(f"[ERROR] {context} failed: {str(e)}", err=True)
-        sys.exit(1)
+            click.echo(f"dry-run {op} {target}")
+        return True
+    cached = lookup_idempotency(idempotency_key())
+    if cached is not None:
+        click.echo(cached)
+        return True
+    return False
 
 
 def format_output(data, raw=False, pipe=False):
     """Format and output data with improved UX."""
+    if machine() and not pipe:
+        emit(data)
+        return
     # Import built-in types to avoid shadowing issues
     import builtins
     list_type = builtins.list
@@ -192,7 +249,7 @@ def format_output(data, raw=False, pipe=False):
             click.echo(str(data))
 
 
-@click.group()
+@click.group(cls=AnyMomentGroup)
 @click.version_option(version=__version__)
 def cli():
     """AnyMoment CLI - Manage calendars and events."""
@@ -206,33 +263,61 @@ def auth():
 
 
 @auth.command()
+@click.option("--email", default=None, help="Account email. Required when stdin is not a terminal.")
+@click.option("--password", default=None, help="Account password. Required when stdin is not a terminal.")
 @click.option("--host", "-h", default=None, help="API host URL")
-def login(host):
-    """Interactive login (prompts for email/password)."""
+def login(email, password, host):
+    """Log in. Prompts only on a terminal. ANYMOMENT_TOKEN skips the prompt."""
     api_url = host or get_api_url()
-    click.echo(f"Logging in to {api_url}...")
-    
-    email = click.prompt("Email", type=str, default=None)
-    if not email:
-        click.echo("[ERROR] Email is required.", err=True)
-        sys.exit(1)
-    
-    password = click.prompt("Password", type=str, hide_input=True, default=None)
-    if not password:
-        click.echo("[ERROR] Password is required.", err=True)
-        sys.exit(1)
-    
+    env_token = os.environ.get("ANYMOMENT_TOKEN")
+    if env_token and not email and not password:
+        client = Client(api_url=api_url, token=env_token)
+        client._set_token(env_token)
+        if machine():
+            emit({"status": "saved", "host": api_url})
+        else:
+            click.echo("[OK] Login successful!")
+            click.echo(f"  Token saved for {api_url}")
+        return
+
+    if not email or not password:
+        if not sys.stdin.isatty():
+            fail(
+                AuthenticationError(
+                    "Email and password are required when stdin is not a terminal.",
+                    user_message="Not authenticated.",
+                    next_step="Pass --email and --password, or set ANYMOMENT_TOKEN.",
+                )
+            )
+        email = email or click.prompt("Email", type=str)
+        password = password or click.prompt("Password", type=str, hide_input=True)
+
     try:
         client = Client(api_url=api_url)
-        token = client.login(email, password)
-        click.echo("[OK] Login successful!")
-        click.echo(f"  Token saved for {api_url}")
-    except AuthenticationError as e:
-        click.echo(f"[ERROR] Authentication failed: {e.message}", err=True)
-        click.echo("   Please check your email and password.", err=True)
-        sys.exit(2)
+        client.login(email, password)
+        if machine():
+            emit({"status": "saved", "host": api_url})
+        else:
+            click.echo("[OK] Login successful!")
+            click.echo(f"  Token saved for {api_url}")
     except Exception as e:
         handle_api_error(e, "Login")
+
+
+@auth.command("resend-verification")
+@click.option("--host", "-h", default=None, help="API host URL")
+def resend_verification(host):
+    """Send the verification email again."""
+    try:
+        client = get_client(host)
+        result = client.resend_verification()
+        if machine():
+            emit(result)
+            return
+        status = result.get("status") if isinstance(result, dict) else getattr(result, "status", "sent")
+        click.echo(status or "sent")
+    except Exception as e:
+        handle_api_error(e, "Resend verification")
 
 
 @auth.command()
@@ -408,7 +493,7 @@ def update(event_id, when, title, description, timezone, model, host, raw):
                 name=title,
                 description=description,
             )
-        if not raw:
+        if not machine() and not raw:
             click.echo("[OK] Event updated successfully!\n")
         format_output(event, raw=raw)
     except Exception as e:
@@ -437,7 +522,7 @@ def list(active, limit, offset, host, raw, pipe):
             limit=limit,
             offset=offset,
         )
-        if not raw and not pipe and calendars:
+        if not machine() and not raw and not pipe and calendars:
             click.echo(f"Found {len(calendars)} calendar(s):\n")
         format_output(calendars, raw=raw, pipe=pipe)
     except Exception as e:
@@ -463,10 +548,10 @@ def create(name, description, timezone, color, host, raw):
             timezone=tz,
             color=color,
         )
-        if not raw:
+        if not machine() and not raw:
             click.echo("[OK] Calendar created successfully!\n")
         format_output(calendar, raw=raw)
-        if not raw:
+        if not machine() and not raw:
             click.echo(f"\n  Calendar ID: {calendar.get('id', 'N/A')}")
     except Exception as e:
         handle_api_error(e, "Create calendar")
@@ -507,7 +592,7 @@ def update(calendar_id, name, description, timezone, color, active, host, raw):
             color=color,
             is_active=active,
         )
-        if not raw:
+        if not machine() and not raw:
             click.echo("[OK] Calendar updated successfully!\n")
         format_output(calendar, raw=raw)
     except Exception as e:
@@ -538,7 +623,7 @@ def share(calendar_id, user_id, role, host, raw):
     try:
         client = get_client(host)
         result = client.share_calendar(calendar_id, user_id, role)
-        if not raw:
+        if not machine() and not raw:
             click.echo(f"[OK] Calendar shared with user {user_id} as {role}\n")
         format_output(result, raw=raw)
     except Exception as e:
@@ -554,7 +639,7 @@ def webhook_url(calendar_id, host, raw):
     try:
         client = get_client(host)
         result = client.get_calendar_webhook_url(calendar_id)
-        if not raw:
+        if not machine() and not raw:
             webhook_url = result.get("webhook_url", "N/A")
             click.echo(f"[OK] Webhook URL generated:\n  {webhook_url}\n")
         format_output(result, raw=raw)
@@ -579,7 +664,7 @@ def add_event(calendar_id, event_id, display_order, color, host, raw):
             display_order=display_order,
             color_override=color,
         )
-        if not raw:
+        if not machine() and not raw:
             click.echo("[OK] Event added to calendar.\n")
         format_output(result, raw=raw)
     except Exception as e:
@@ -617,7 +702,7 @@ def batch_add_events(calendar_id, event_ids, display_order, color, host, raw):
             display_order=display_order,
             color_override=color,
         )
-        if not raw:
+        if not machine() and not raw:
             click.echo(f"[OK] Added {len(result)} event(s) to calendar.\n")
         format_output(result, raw=raw)
     except Exception as e:
@@ -654,7 +739,7 @@ def update_share(calendar_id, user_id, role, host, raw):
     try:
         client = get_client(host)
         result = client.update_calendar_share_role(calendar_id=calendar_id, user_id=user_id, role=role)
-        if not raw:
+        if not machine() and not raw:
             click.echo(f"[OK] Share role updated to {role}.\n")
         format_output(result, raw=raw)
     except Exception as e:
@@ -671,7 +756,7 @@ def unshare(calendar_id, user_id, host, raw):
     try:
         client = get_client(host)
         result = client.unshare_calendar(calendar_id=calendar_id, user_id=user_id)
-        if not raw:
+        if not machine() and not raw:
             click.echo("[OK] Calendar unshared from user.\n")
         format_output(result, raw=raw)
     except Exception as e:
@@ -696,10 +781,51 @@ def _default_agenda_end_iso() -> str:
     return utc.strftime("%Y-%m-%dT%H:%M:%S") + "Z"
 
 
-@cli.group()
+@cli.group(cls=AgendaGroup)
 def agenda():
     """Agenda and search (time window and fuzzy search)."""
     pass
+
+
+def _print_agenda(events, failures, raw, pipe):
+    if machine():
+        emit({"events": events, "failures": failures})
+        return
+    if not machine() and not raw and not pipe and events:
+        click.echo(f"Found {len(events)} event(s) in window:\n")
+    format_output(events, raw=raw, pipe=pipe)
+    for failure in failures:
+        name = failure.get("event_name") if isinstance(failure, dict) else getattr(failure, "event_name", "")
+        message = failure.get("message") if isinstance(failure, dict) else getattr(failure, "message", "")
+        click.echo(f"Failed: {name} {message}".strip(), err=True)
+
+
+@agenda.command("show")
+@click.argument("window", required=False, default="today")
+@click.option("--calendar", "-c", default=None, help="Restrict to calendar name(s) or ID(s)")
+@click.option("--host", "-h", help="API host URL")
+@click.option("--raw", is_flag=True, help="Output full JSON")
+@click.option("--pipe", is_flag=True, help="Output only event IDs")
+def agenda_show(window, calendar, host, raw, pipe):
+    """One-call agenda. Example: anymoment agenda \"next week\"."""
+    try:
+        start_iso, end_iso = resolve_window(window or "today", get_default_timezone())
+    except DateParseError as exc:
+        click.echo(str(exc), err=True)
+        sys.exit(EXIT_USAGE)
+    try:
+        client = get_client(host)
+        calendar_ids = resolve_calendar_ids(client, calendar)
+        events, failures = _agenda_parts(
+            client.get_agenda(start=start_iso, end=end_iso, calendar_ids=calendar_ids)
+        )
+        if machine():
+            emit({"events": events, "failures": failures, "start": start_iso, "end": end_iso, "window": window})
+            return
+        click.echo(f"{start_iso} .. {end_iso}")
+        _print_agenda(events, failures, raw, pipe)
+    except Exception as e:
+        handle_api_error(e, "Agenda")
 
 
 @agenda.command("list")
@@ -718,16 +844,16 @@ def agenda_list(start, end, calendar, no_cache, webhooks, host, raw, pipe):
         end_iso = end if end is not None else _default_agenda_end_iso()
         client = get_client(host)
         calendar_ids = resolve_calendar_ids(client, calendar)
-        items = client.get_agenda(
-            start=start_iso,
-            end=end_iso,
-            calendar_ids=calendar_ids,
-            use_cache=not no_cache,
-            include_webhooks=webhooks,
+        events, failures = _agenda_parts(
+            client.get_agenda(
+                start=start_iso,
+                end=end_iso,
+                calendar_ids=calendar_ids,
+                use_cache=not no_cache,
+                include_webhooks=webhooks,
+            )
         )
-        if not raw and not pipe and items:
-            click.echo(f"Found {len(items)} event(s) in window:\n")
-        format_output(items, raw=raw, pipe=pipe)
+        _print_agenda(events, failures, raw, pipe)
     except Exception as e:
         handle_api_error(e, "Agenda list")
 
@@ -759,7 +885,7 @@ def agenda_search(query, start, end, calendar, active, limit, offset, no_instanc
             offset=offset,
             include_instances=not no_instances,
         )
-        if not raw and not pipe and items:
+        if not machine() and not raw and not pipe and items:
             click.echo(f"Found {len(items)} event(s):\n")
         format_output(items, raw=raw, pipe=pipe)
     except Exception as e:
@@ -797,6 +923,24 @@ def create(
             if description:
                 parts.append(f"Description: {description}")
             context = "\n".join(parts)
+        if dry_run():
+            preview = client.preview_event_from_text(
+                name=name or "Event",
+                recurrence_text=text,
+                start=_default_agenda_start_iso(),
+                end=_default_agenda_end_iso(),
+                description=description,
+                timezone=tz,
+                model=model if model in {"high", "low"} else "high",
+            )
+            if machine():
+                emit({"dry_run": True, "op": "create", "preview": preview})
+            else:
+                click.echo("dry-run create")
+                format_output(preview, raw=True)
+            return
+        if _replay_or_dry_run("create", text):
+            return
         result = client.extract_and_create_events(
             text=text,
             context=context,
@@ -844,7 +988,7 @@ def list(calendar, active, limit, offset, minimal, host, raw, pipe):
             offset=offset,
             minimal=minimal,
         )
-        if not raw and not pipe and events:
+        if not machine() and not raw and not pipe and events:
             click.echo(f"Found {len(events)} event(s):\n")
         format_output(events, raw=raw, pipe=pipe)
     except Exception as e:
@@ -902,7 +1046,7 @@ def update(event_id, when, title, name, description, timezone, model, host, raw)
                 name=title_or_name,
                 description=description,
             )
-        if not raw:
+        if not machine() and not raw:
             click.echo("[OK] Event updated successfully!\n")
         format_output(event, raw=raw)
     except Exception as e:
@@ -913,11 +1057,17 @@ def update(event_id, when, title, name, description, timezone, model, host, raw)
 @click.argument("event_id")
 @click.option("--host", "-h", help="API host URL")
 def delete(event_id, host):
-    """Delete an event."""
+    """Delete an event. On a terminal, asks first unless --yes is set."""
     try:
+        if sys.stdin.isatty() and not confirmed() and not dry_run():
+            click.confirm(f"Delete event {event_id}?", abort=True)
+        if _replay_or_dry_run("delete", event_id):
+            return
         client = get_client(host)
-        client.delete_event(event_id)
-        click.echo("[OK] Event deleted successfully")
+        result = client.delete_event(event_id)
+        _finish_mutation(result, "[OK] Event deleted successfully")
+    except click.Abort:
+        sys.exit(EXIT_USAGE)
     except Exception as e:
         handle_api_error(e, "Delete event")
 
@@ -932,7 +1082,7 @@ def toggle(event_id, host, raw):
         client = get_client(host)
         event = client.toggle_event(event_id)
         status = "activated" if event.get("is_active") else "deactivated"
-        if not raw:
+        if not machine() and not raw:
             click.echo(f"[OK] Event {status} successfully!\n")
         format_output(event, raw=raw)
     except Exception as e:
@@ -956,7 +1106,7 @@ def instances(event_id, from_date, to_date, optimized, host, raw):
             to_date=to_date,
             optimized=optimized,
         )
-        if not raw and instances:
+        if not machine() and not raw and instances:
             click.echo(f"Found {len(instances)} instance(s):\n")
         format_output(instances, raw=raw)
     except Exception as e:
@@ -972,7 +1122,7 @@ def next(event_id, host, raw):
     try:
         client = get_client(host)
         instance = client.get_next_event_instance(event_id)
-        if not raw and instance:
+        if not machine() and not raw and instance:
             start = instance.get("start", "N/A")
             click.echo(f"Next occurrence: {start}\n")
         format_output(instance, raw=raw)
@@ -1022,9 +1172,105 @@ def me(host, raw):
     try:
         client = get_client(host)
         user = client.get_user_info()
-        if not raw:
-            email = user.get("email", "N/A")
+        if machine():
+            emit(user)
+            return
+        if not machine() and not raw:
+            email = user.get("email", "N/A") if isinstance(user, dict) else getattr(user, "email", "N/A")
             click.echo(f"Logged in as: {email}\n")
         format_output(user, raw=raw)
     except Exception as e:
         handle_api_error(e, "Get user info")
+
+
+def _schema_document():
+    def walk(group, prefix):
+        found = []
+        for name, cmd in group.commands.items():
+            path = f"{prefix} {name}".strip()
+            if isinstance(cmd, click.Group):
+                found.extend(walk(cmd, path))
+            else:
+                found.append(path)
+        return found
+
+    return {
+        "v": 1,
+        "commands": walk(cli, ""),
+        "exit_codes": {name: code for code, name in EXIT_CODE_NAMES.items()},
+        "flags": [
+            "--json",
+            "--jsonl",
+            "--fields",
+            "--yes",
+            "--dry-run",
+            "--idempotency-key",
+        ],
+    }
+
+
+def _echo_schema():
+    click.echo(json.dumps(_schema_document(), separators=(",", ":"), sort_keys=True))
+
+
+@cli.command("schema")
+def schema():
+    """Print the command list and exit codes as JSON."""
+    _echo_schema()
+
+
+@cli.command("help")
+@click.argument("topic", required=False)
+def help_command(topic):
+    """Show help. With --json, print the same document as `anymoment schema`."""
+    if machine():
+        _echo_schema()
+        return
+    click.echo(cli.get_help(click.Context(cli)))
+
+
+@events.command("batch")
+@click.option("--host", "-h", default=None, help="API host URL")
+def batch(host):
+    """Apply create, update, delete, and link operations from JSONL on stdin."""
+    raw_input = sys.stdin.read()
+    if not raw_input.strip():
+        click.echo("Expected JSONL operations on stdin.", err=True)
+        sys.exit(EXIT_USAGE)
+    try:
+        client = get_client(host)
+        results = []
+        for line in raw_input.splitlines():
+            if not line.strip():
+                continue
+            item = json.loads(line)
+            op = item.get("op")
+            if op == "create":
+                results.append(
+                    client.extract_and_create_events(
+                        text=item.get("text") or item.get("recurrence_text") or ""
+                    )
+                )
+            elif op == "update":
+                results.append(
+                    client.update_event(
+                        item["id"],
+                        name=item.get("name"),
+                        description=item.get("description"),
+                    )
+                )
+            elif op == "delete":
+                results.append(client.delete_event(item["id"]))
+            elif op == "link":
+                results.append(
+                    client.link_event_to_calendar(item["calendar_id"], item["event_id"])
+                )
+            else:
+                click.echo(f"Unknown batch op: {op}", err=True)
+                sys.exit(EXIT_USAGE)
+        if machine():
+            emit(results)
+        else:
+            click.echo(f"Applied {len(results)} operation(s).")
+    except Exception as e:
+        handle_api_error(e, "Batch")
