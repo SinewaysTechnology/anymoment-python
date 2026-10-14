@@ -12,11 +12,14 @@ from anymoment.exceptions import (
     exception_for_status,
     parse_error_payload,
 )
+from anymoment.caldav import CalDavClient
+from anymoment.endpoints import EndpointsMixin
+from anymoment.google import GoogleAPI
 from anymoment.models import AgendaResult, agenda_result, mutation_result
 from anymoment.token_manager import get_token, save_token
 
 
-class Client:
+class Client(EndpointsMixin):
     """Client for interacting with the AnyMoment API."""
     
     DEFAULT_API_URL = "https://api.anymoment.sineways.tech"
@@ -33,6 +36,16 @@ class Client:
         self.api_url = self.api_url.rstrip("/")
         self._token = token
         self._session = requests.Session()
+
+    @property
+    def google(self) -> GoogleAPI:
+        """Google account, sync health, quarantine, and sync status calls."""
+        return GoogleAPI(self)
+
+    @property
+    def caldav(self) -> CalDavClient:
+        """Experimental CalDAV API. Remote auth failures do not refresh the session token."""
+        return CalDavClient(self)
     
     def _get_token(self) -> Optional[str]:
         """Get authentication token."""

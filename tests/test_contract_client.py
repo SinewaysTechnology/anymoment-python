@@ -1,9 +1,4 @@
-"""SDK contract for the shapes in tests/fixtures.
-
-Passing tests cover behavior 1.0 already matches.
-`pending` tests are the 2.0 checklist: they fail until the client grows
-the result objects, the error fields, and resend_verification().
-"""
+"""SDK contract for the shapes in tests/fixtures."""
 
 import pytest
 import responses
@@ -18,7 +13,6 @@ from tests.support import (
     exception_type,
     field,
     load_fixture,
-    pending,
     require_attr,
 )
 
@@ -192,7 +186,6 @@ def test_unverified_login_is_its_own_error(mock_token_file):
     "fixture_name, expected",
     [("resend_200_sent.json", "sent"), ("resend_200_already_verified.json", "already_verified")],
 )
-@pending("resend_verification() returns the 200 {status} body")
 def test_resend_verification_ok(client, fixture_name, expected):
     body = load_fixture(fixture_name)
     with responses.RequestsMock(assert_all_requests_are_fired=False) as rsps:
@@ -205,7 +198,6 @@ def test_resend_verification_ok(client, fixture_name, expected):
     assert _status(result, body) == expected
 
 
-@pending("resend 429 raises RateLimitError with retry_after from retry_after_seconds")
 def test_resend_verification_rate_limit(client):
     body = load_fixture("resend_429.json")
     limited = exception_type("RateLimitError")
@@ -219,7 +211,6 @@ def test_resend_verification_rate_limit(client):
     assert err.user_message == body["user_message"]
 
 
-@pending("resend 502 raises an error with top-level user_message and next_step")
 def test_resend_verification_upstream(client):
     body = load_fixture("resend_502.json")
     with responses.RequestsMock(assert_all_requests_are_fired=False) as rsps:
