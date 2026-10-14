@@ -2,10 +2,12 @@
 
 from anymoment import __version__
 
+import io
 import json
 from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
+import responses
 from click.testing import CliRunner
 
 from anymoment.cli.commands import cli
@@ -15,7 +17,7 @@ from tests.support import CALENDAR_ID, EVENT_ID, EXIT_AUTH, EXIT_OK, EXIT_USAGE
 
 
 def test_package_version_is_2():
-    assert __version__ == "2.0.0"
+    assert __version__ == "2.0.1"
 
 
 def test_natural_windows_are_stable():
@@ -65,6 +67,112 @@ def test_dry_run_create_previews(monkeypatch, mock_token_file):
     client.preview_event_from_text.assert_called_once()
     payload = json.loads(result.stdout)
     assert payload["dry_run"] is True
+
+
+class _TtyBuffer(io.BytesIO):
+    def isatty(self) -> bool:
+        return True
+
+
+def _no_http(argv, monkeypatch, tty=False):
+    monkeypatch.setenv("ANYMOMENT_TOKEN", "test-token")
+    with responses.RequestsMock(assert_all_requests_are_fired=False) as rsps:
+        result = CliRunner().invoke(cli, argv, input=_TtyBuffer() if tty else None)
+        calls = list(rsps.calls)
+    return result, calls
+
+
+def test_toplevel_create_dry_run_makes_no_http(monkeypatch, mock_token_file, mock_config_file):
+    result, calls = _no_http(
+        ["create", "Tomorrow at 9", "--dry-run", "--json", "--host", "https://api.test.anymoment"],
+        monkeypatch,
+    )
+    assert result.exit_code == EXIT_OK, result.output
+    assert calls == []
+    payload = json.loads(result.stdout)
+    assert payload["dry_run"] is True
+    assert payload["op"] == "create"
+    assert payload["target"] == "Tomorrow at 9"
+
+
+def test_toplevel_update_dry_run_makes_no_http(monkeypatch, mock_token_file, mock_config_file):
+    result, calls = _no_http(
+        ["update", EVENT_ID, "--title", "Lunch", "--dry-run", "--json", "--host", "https://api.test.anymoment"],
+        monkeypatch,
+    )
+    assert result.exit_code == EXIT_OK, result.output
+    assert calls == []
+    payload = json.loads(result.stdout)
+    assert payload["dry_run"] is True
+    assert payload["op"] == "update"
+    assert payload["target"] == EVENT_ID
+
+
+def test_toplevel_update_without_fields_exits_usage(monkeypatch, mock_token_file, mock_config_file):
+    result, calls = _no_http(
+        ["update", EVENT_ID, "--host", "https://api.test.anymoment"],
+        monkeypatch,
+    )
+    assert result.exit_code == EXIT_USAGE
+    assert calls == []
+
+
+def test_events_update_without_fields_exits_usage(monkeypatch, mock_token_file, mock_config_file):
+    result, calls = _no_http(
+        ["events", "update", EVENT_ID, "--host", "https://api.test.anymoment"],
+        monkeypatch,
+    )
+    assert result.exit_code == EXIT_USAGE
+    assert calls == []
+
+
+def test_toplevel_yes_skips_confirm_and_dry_run_still_makes_no_http(
+    monkeypatch, mock_token_file, mock_config_file
+):
+    blocked, blocked_calls = _no_http(
+        ["update", EVENT_ID, "--title", "Lunch", "--host", "https://api.test.anymoment"],
+        monkeypatch,
+        tty=True,
+    )
+    assert blocked.exit_code == EXIT_USAGE, blocked.output
+    assert blocked_calls == []
+
+    allowed, allowed_calls = _no_http(
+        [
+            "create",
+            "Tomorrow at 9",
+            "--yes",
+            "--dry-run",
+            "--json",
+            "--host",
+            "https://api.test.anymoment",
+        ],
+        monkeypatch,
+        tty=True,
+    )
+    assert allowed.exit_code == EXIT_OK, allowed.output
+    assert allowed_calls == []
+    assert json.loads(allowed.stdout)["dry_run"] is True
+
+
+def test_toplevel_yes_sends_create(monkeypatch, mock_token_file, mock_config_file):
+    monkeypatch.setenv("ANYMOMENT_TOKEN", "test-token")
+    host = "https://api.test.anymoment"
+    body = {
+        "summary": {"total_extracted": 0, "successfully_created": 0, "failed_to_create": 0},
+        "created_events": [],
+    }
+    with responses.RequestsMock(assert_all_requests_are_fired=False) as rsps:
+        rsps.add(responses.POST, f"{host}/events/extract", json=body, status=200)
+        result = CliRunner().invoke(
+            cli,
+            ["create", "Tomorrow at 9", "--yes", "--host", host],
+            input=_TtyBuffer(),
+        )
+        assert result.exit_code == EXIT_OK, result.output
+        assert len(rsps.calls) == 1
+        assert rsps.calls[0].request.method == "POST"
+        assert rsps.calls[0].request.url == f"{host}/events/extract"
 
 
 def test_dry_run_delete_skips_the_api(monkeypatch, mock_token_file):

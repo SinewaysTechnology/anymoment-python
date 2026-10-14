@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "anymoment"
-version = "2.0.0"
+version = "2.0.1"
 description = "Python SDK and CLI for AnyMoment API - Create and manage your schedule with natural language, write moments the way you think them."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -49,6 +49,7 @@ Homepage = "https://anymoment.sineways.tech"
 Documentation = "https://anymoment.sineways.tech/anymoment-python/docs"
 Repository = "https://github.com/SinewaysTechnology/anymoment-python"
 Issues = "https://github.com/SinewaysTechnology/anymoment-python/issues"
+Changelog = "https://github.com/SinewaysTechnology/anymoment-python/blob/main/CHANGELOG.md"
 
 [tool.setuptools.packages.find]
 where = ["."]
@@ -70,12 +71,11 @@ line-length = 100
 src = ["anymoment", "tests"]
 
 [tool.ruff.lint]
-# Pyflakes and syntax errors. Style-only rules stay off until the 2.0 rewrite.
+# Pyflakes and syntax errors.
 select = ["E9", "F"]
 
 [tool.ruff.lint.per-file-ignores]
 # Click registers one callback per group; those functions intentionally reuse names.
-# F401/F541/F841 here are pre-existing and stay until the 2.0 rewrite.
 "anymoment/cli/commands.py" = ["F811", "F401", "F541", "F841"]
 "anymoment/token_manager.py" = ["F401", "F841"]
 
@@ -91,5 +91,5 @@ disable_error_code = ["no-redef"]
 
 [[tool.mypy.overrides]]
 module = "anymoment.client"
-# Query dicts are inferred too narrowly (str vs bool or int). Tighten the annotations in 2.0.
+# Query dicts are inferred too narrowly (str vs bool or int).
 disable_error_code = ["assignment"]

@@ -48,23 +48,43 @@ jobs:
           fi
 
       - name: Install build dependencies
-        run: pip install build
+        run: python -m pip install --upgrade pip build wheel
 
       - name: Build package
-        run: python -m build
+        run: python -m build --sdist --wheel
+
+      - name: Require a wheel and an sdist
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          dist = Path("dist")
+          wheels = sorted(dist.glob("*.whl"))
+          sdists = sorted(dist.glob("*.tar.gz"))
+          print("wheel:", [path.name for path in wheels])
+          print("sdist:", [path.name for path in sdists])
+          if len(wheels) != 1 or len(sdists) != 1:
+              raise SystemExit("Build must produce exactly one wheel and one sdist.")
+          PY
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
+          verbose: true
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           name: anymoment ${{ steps.version.outputs.version }}
+          files: |
+            dist/*.whl
+            dist/*.tar.gz
+          fail_on_unmatched_files: true
           body: |
             ## anymoment ${{ steps.version.outputs.version }}
             Python SDK and CLI for AnyMoment API.
-            Install: `pip install anymoment[cli]`
+            Install: `pip install "anymoment[cli]"`
           draft: false
           generate_release_notes: true
         env:

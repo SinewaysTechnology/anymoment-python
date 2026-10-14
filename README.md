@@ -2,7 +2,7 @@
 
 Python SDK and command-line interface for the [AnyMoment API](https://api.anymoment.sineways.tech) - Create and manage recurring calendar events with natural language.
 
-**📖 [Full documentation (Python SDK & CLI)](https://anymoment.sineways.tech/anymoment-python/docs)** — installation, quick start, all CLI commands, and Library API reference.
+**📖 [Full documentation (Python SDK & CLI)](https://anymoment.sineways.tech/anymoment-python/docs)**: installation, quick start, all CLI commands, and Library API reference.
 
 ## Features
 
@@ -17,16 +17,23 @@ Python SDK and command-line interface for the [AnyMoment API](https://api.anymom
 ### Library Only
 
 ```bash
-pip install anymoment
+pip install "anymoment"
 ```
 
 ### With CLI
 
 ```bash
-pip install anymoment[cli]
+pip install "anymoment[cli]"
 ```
 
 ## Quick Start
+
+```bash
+pip install "anymoment[cli]"
+am auth login
+am today
+am today --json --fields events,failures
+```
 
 ### CLI Usage
 
@@ -81,16 +88,27 @@ instances = client.get_event_instances(
 
 ## Version 2.0
 
-`get_agenda` returns an object with `.events` and `.failures`. Delete, unlink, update, toggle, and link return their warning fields instead of dropping the response body. Errors expose `user_message`, `next_step`, `code`, and `retry_after`. The migration notes are in [CHANGELOG.md](CHANGELOG.md).
+2.0.1 is the current release. It requires Python 3.10 or newer. The migration notes, including 2.0.1, 1.0.0, and 0.1.0, are in [CHANGELOG.md](CHANGELOG.md).
+
+`get_agenda` returns an object with `.events` and `.failures`. It is not a list. Delete, unlink, update, toggle, and link return their warning fields (`.message`, `.sync_warnings`, or `.google_export_warnings`) instead of dropping the response body.
+
+Errors expose `.message`, `.next_step`, and `.retry_after`, plus `code` and `user_message`. New types cover unverified email, permission denied (403), conflict (409), unprocessable input (422), and rate limits (429, `.retry_after`). A 401 refreshes the session token only for a real AnyMoment session. Login and CalDAV `auth_failed` do not refresh.
+
+The CLI accepts `--json`, `--jsonl`, `--fields`, `--dry-run`, `--yes`, `--idempotency-key`, and `--profile` on the subcommand. Top-level `create` and `update` write events. `--dry-run` prints the action and does not call the API. On a terminal those writes ask first unless you pass `--yes`. `update` with no fields exits 2.
+
+`anymoment` and `am` are the same command. `a` is agenda, `ls` lists calendars, and `rm` deletes an event. `anymoment completion bash` (also `zsh` and `fish`) registers both `anymoment` and `am`.
+
+Exit codes: 0 ok, 2 usage, 3 auth, 4 not found, 5 conflict, 6 rate limited, 7 remote or sync error. A successful payload that includes `failures` or `sync_warnings` still exits 0.
 
 ```bash
 anymoment agenda "next week" --json
+anymoment create "Lunch tomorrow at noon" --dry-run
+anymoment update <event-id> --title "Lunch" --yes
 anymoment auth login --email you@example.com --password "$ANYMOMENT_PASSWORD"
 # or skip the prompt with ANYMOMENT_TOKEN
 anymoment schema
+anymoment completion bash
 ```
-
-`anymoment` and `am` are the same command. `a` is agenda, `ls` lists calendars, and `rm` deletes an event.
 
 ## Configuration
 
@@ -122,6 +140,16 @@ anymoment config show
 ```
 
 ## CLI Commands
+
+### Create and update
+
+```bash
+# Top-level create. --dry-run makes no API call. On a terminal, confirm unless --yes.
+anymoment create "Lunch tomorrow at noon" [--calendar ID] [--timezone TZ] [--context TEXT] [--dry-run] [--yes]
+
+# Top-level update. Exits 2 when none of --when, --title, or --description is set.
+anymoment update <event-id> [--when TEXT] [--title TEXT] [--description TEXT] [--dry-run] [--yes]
+```
 
 ### Authentication
 
@@ -249,14 +277,15 @@ anymoment users me
 - `--pipe` - Output only IDs (for piping/chaining)
 - `--json` - One compact JSON object on stdout (`"v": 1`)
 - `--jsonl` - One compact JSON object per line
-- `--fields a,b` - Keep these JSON fields, plus `v`
-- `--dry-run` - Show a mutation without sending it. Create uses the preview endpoint.
+- `--fields a,b` - Keep these JSON fields, plus `v`. Example: `am today --json --fields events,failures`
+- `--dry-run` - Show a mutation without sending it. Top-level `create` and `update` make no API call. `events create` uses the preview endpoint.
+- `--yes` - Skip the confirmation prompt. Top-level `create` and `update`, and `events delete`, ask on a terminal unless this is set.
 - `--idempotency-key KEY` - Local replay cache. The API has no idempotency header.
 - `--profile NAME` - Use `~/.anymoment/config.NAME.json`
 - `--timezone, -z TZ` - Override timezone for this command
 - `--calendar, -c ID` - Specify calendar ID or name (or use default from config)
 
-Machine-readable errors go to stderr when `--json` or `--jsonl` is set. `anymoment schema` lists commands and exit codes. `anymoment completion bash` prints a shell snippet.
+Machine-readable errors go to stderr when `--json` or `--jsonl` is set. `anymoment schema` lists commands and exit codes. `anymoment completion bash|zsh|fish` prints a snippet that registers `anymoment` and `am`.
 
 Exit codes: 0 ok, 2 usage, 3 auth, 4 not found, 5 conflict, 6 rate limited, 7 remote or sync error.
 
@@ -314,6 +343,39 @@ client = Client(api_url="https://api.anymoment.sineways.tech", token="optional-t
 - `client.unlink_event_from_calendar(calendar_id, event_id)` - Remove one event from a calendar (unlink only; event is not deleted)
 - `client.batch_add_events_to_calendar(calendar_id, event_ids, display_order=None, color_override=None)` - Add multiple events to a calendar in one request
 - `client.batch_remove_events_from_calendar(calendar_id, event_ids)` - Remove multiple events from a calendar (unlink only)
+
+#### Accounts, passwords, and tokens
+
+- `client.change_password(new_password, old_password=None)` - Change the signed-in user's password
+- `client.reset_password(user, new_password)` - Reset a password. `user` is an email or a user object
+- `client.create_permanent_token(email, ...)` - Create a permanent token
+- `client.list_permanent_tokens()` - List permanent tokens
+- `client.delete_permanent_token(token)` - Revoke one permanent token
+- `client.create_feedback(message, rating=None, title=None)` - Send product feedback
+
+#### Structured events, preview, import, guests, and webhooks
+
+- `client.create_event(name, components, description=None)` - Create an event from recurrence components
+- `client.get_events_batch(event_ids, ...)` - Fetch many events by id
+- `client.preview_event_from_text(name, recurrence_text, start, end, ...)` - Preview natural language without saving
+- `client.create_event_from_ics(ics_content, ...)` - Create an event from ICS text
+- `client.list_event_feedback(...)` / `client.create_event_feedback(value, event_data, message=None)` - Event feedback
+- `client.list_guests(event_id)` / `client.add_guest(event_id, **fields)` / `client.update_guest(...)` / `client.delete_guest(...)` - Event guests
+- `client.list_webhooks(event_id)` / `client.create_webhook(...)` / `client.get_webhook(...)` / `client.update_webhook(...)` / `client.delete_webhook(...)` / `client.list_webhook_runs(...)` - Event webhooks
+
+#### Instances, export, and changes
+
+- `client.get_calendar_instances(calendar_id, start, end, ...)` - Instances on one calendar
+- `client.get_loose_event_instances(start, end, ...)` - Instances that are not on a calendar
+- `client.export_calendar(calendar_id, start, end)` - Download a window as ICS text
+- `client.get_changes(since)` - Poll changes across calendars
+- `client.get_calendar_changes(calendar_id, since)` - Poll changes for one calendar
+
+#### Google and CalDAV
+
+- `client.google.accounts()` / `delete_account(account_id)` - Connected Google accounts
+- `client.google.sync_health(export_id=None)` / `quarantine(...)` / `resolve_quarantine(quarantine_id, resolution)` / `sync_status(job_id)` - Google sync
+- `client.caldav` - Experimental. `capabilities`, `discover`, `test_connection`, account create/list/get/update, `refresh_calendars`, login flow, links, destinations, `refresh`, `sync_health`, quarantine, `enable_push`, `fetch_certificate`, disconnect, and reconnect. Remote credential failures do not refresh the AnyMoment token.
 
 ## Examples
 
@@ -378,14 +440,16 @@ print(f"Next occurrence: {next_instance}")
 
 ```python
 # Get events and instances in a time window (agenda)
-items = client.get_agenda(
+result = client.get_agenda(
     start="2026-01-01T00:00:00Z",
     end="2026-01-31T23:59:59Z",
     calendar_ids=[calendar["id"]],
     use_cache=True,
 )
-for item in items:
+for item in result.events:
     print(item["event"]["name"], item["instances"])
+for failure in result.failures:
+    print(failure.get("user_message"), failure.get("next_step"))
 
 # Fuzzy search events by name
 results = client.search_events(
@@ -406,22 +470,29 @@ The SDK raises specific exceptions for different error types:
 ```python
 from anymoment import (
     AuthenticationError,
+    ConflictError,
+    EmailNotVerifiedError,
     NotFoundError,
-    ValidationError,
+    PermissionDeniedError,
+    RateLimitError,
     ServerError,
+    UnprocessableError,
+    ValidationError,
 )
 
 try:
     calendar = client.get_calendar("invalid-id")
-except NotFoundError:
-    print("Calendar not found")
-except AuthenticationError:
-    print("Authentication failed - please login again")
-except ValidationError as e:
-    print(f"Validation error: {e.message}")
-except ServerError as e:
-    print(f"Server error: {e.message}")
+except NotFoundError as exc:
+    print(exc.message, exc.next_step)
+except EmailNotVerifiedError as exc:
+    print(exc.message, exc.next_step)
+except RateLimitError as exc:
+    print(exc.message, exc.retry_after)
+except (AuthenticationError, PermissionDeniedError, ConflictError, ValidationError, UnprocessableError, ServerError) as exc:
+    print(exc.message, exc.next_step)
 ```
+
+Every SDK error has `.message` (the text to show), `.next_step`, and `.retry_after`. `.retry_after` is set on HTTP 429 and is `None` otherwise. `EmailNotVerifiedError` is the plain-text unverified sign-in. `PermissionDeniedError` is 403, `ConflictError` is 409, `UnprocessableError` is 422, and `RateLimitError` is 429.
 
 ## Token Management
 
@@ -433,32 +504,7 @@ Tokens are automatically stored encrypted in `~/.anymoment/tokens.json` using ma
 
 ## Development
 
-### Running Tests
-
-```bash
-# Install development dependencies
-pip install -e ".[cli]"
-pip install pytest pytest-mock pytest-cov build twine
-
-# Run tests
-pytest
-
-# Run with coverage
-pytest --cov=anymoment --cov-report=html
-```
-
-### Building Distribution
-
-```bash
-# Install build tools
-pip install build twine
-
-# Build distributions
-python -m build
-
-# Check distributions
-twine check dist/*
-```
+Tests, lint, types, and the package build are documented in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
@@ -467,7 +513,6 @@ MIT License - see [LICENSE](LICENSE) file for details.
 ## Support
 
 - **Python SDK & CLI docs**: [https://anymoment.sineways.tech/anymoment-python/docs](https://anymoment.sineways.tech/anymoment-python/docs)
-- **AnyMoment docs**: https://docs.anymoment.ai
 - **API Base URL**: https://api.anymoment.sineways.tech
 - **Issues**: https://github.com/SinewaysTechnology/anymoment-python/issues
 

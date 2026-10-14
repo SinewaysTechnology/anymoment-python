@@ -1,6 +1,15 @@
 # Changelog
 
-## 2.0.0
+## [2.0.1] - 2026-10-14
+
+### Fixed
+
+- Top-level `create` and `update` honor `--dry-run` and `--yes`. `--dry-run` reuses the local replay check and does not call the API. On a terminal, those commands ask first unless `--yes` is set.
+- `update` with no fields exits 2.
+- `anymoment completion` registers both `anymoment` and `am` for bash, zsh, and fish.
+- The package build produces a wheel and an sdist. The publish workflow uploads both to PyPI and attaches both to the GitHub release.
+
+## [2.0.0] - 2026-10-14
 
 Python 3.10 or newer. 3.8 and 3.9 are no longer supported.
 
@@ -44,3 +53,16 @@ Python 3.10 or newer. 3.8 and 3.9 are no longer supported.
 - `--idempotency-key` is a local cache. The API does not accept an idempotency header.
 - `SubscriptionRequiredError` is not defined. The public contract used here does not pin a status code for it.
 - The CalDAV push receiver (`POST /caldav/push/{account_id}`) is a server-to-server callback and is not wrapped.
+
+## [1.0.0] - 2026-02-25
+
+CLI updates for the API at that time, and a stable 1.0 release. Requires Python 3.8 or newer.
+
+## [0.1.0] - 2026-02-02
+
+First published SDK and CLI, with calendar and event commands, batch linking and sharing, and the PyPI publish workflow.
+
+[2.0.1]: https://github.com/SinewaysTechnology/anymoment-python/compare/v2.0.0...v2.0.1
+[2.0.0]: https://github.com/SinewaysTechnology/anymoment-python/compare/v1.0.0...v2.0.0
+[1.0.0]: https://github.com/SinewaysTechnology/anymoment-python/compare/v0.1.0...v1.0.0
+[0.1.0]: https://github.com/SinewaysTechnology/anymoment-python/releases/tag/v0.1.0

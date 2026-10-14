@@ -443,6 +443,10 @@ def show():
 def create(text, calendar, context, timezone, model, host, raw):
     """Create events from free-form text (extract + create in one step)."""
     try:
+        if sys.stdin.isatty() and not confirmed() and not dry_run():
+            click.confirm("Create events from this text?", abort=True)
+        if _replay_or_dry_run("create", text):
+            return
         client = get_client(host)
         cal_id = resolve_calendar_id(client, calendar)
         tz = timezone or get_default_timezone()
@@ -468,6 +472,8 @@ def create(text, calendar, context, timezone, model, host, raw):
                 click.echo(f"  Created: {ev} ({eid})")
             else:
                 click.echo(f"  Failed:  {ev} — {cr.get('error_message', 'unknown')}")
+    except click.Abort:
+        sys.exit(EXIT_USAGE)
     except Exception as e:
         handle_api_error(e, "Create events")
 
@@ -485,8 +491,12 @@ def update(event_id, when, title, description, timezone, model, host, raw):
     """Update an event (schedule, title, and/or description). At least one of --when, --title, --description required."""
     if not any([when, title, description]):
         click.echo("[ERROR] Provide at least one of: --when, --title, --description", err=True)
-        sys.exit(1)
+        sys.exit(EXIT_USAGE)
     try:
+        if sys.stdin.isatty() and not confirmed() and not dry_run():
+            click.confirm(f"Update event {event_id}?", abort=True)
+        if _replay_or_dry_run("update", event_id):
+            return
         client = get_client(host)
         tz = timezone or get_default_timezone()
         if when is not None:
@@ -510,6 +520,8 @@ def update(event_id, when, title, description, timezone, model, host, raw):
         if not machine() and not raw:
             click.echo("[OK] Event updated successfully!\n")
         format_output(event, raw=raw)
+    except click.Abort:
+        sys.exit(EXIT_USAGE)
     except Exception as e:
         handle_api_error(e, "Update event")
 
@@ -1042,7 +1054,7 @@ def update(event_id, when, title, name, description, timezone, model, host, raw)
     title_or_name = title if title is not None else name
     if not any([when, title_or_name, description]):
         click.echo("[ERROR] Provide at least one of: --when, --title/--name, --description", err=True)
-        sys.exit(1)
+        sys.exit(EXIT_USAGE)
     try:
         client = get_client(host)
         tz = timezone or get_default_timezone()
@@ -1289,12 +1301,13 @@ def next_window(calendar, host, raw, pipe):
 @cli.command("completion")
 @click.argument("shell", type=click.Choice(["bash", "zsh", "fish"]))
 def completion(shell):
-    """Print a shell completion snippet for bash, zsh, or fish."""
-    variable = "_ANYMOMENT_COMPLETE"
+    """Print a shell completion snippet for bash, zsh, or fish. Registers anymoment and am."""
     if shell == "fish":
-        click.echo(f"{variable}=fish_source anymoment | source")
+        click.echo("_ANYMOMENT_COMPLETE=fish_source anymoment | source")
+        click.echo("_AM_COMPLETE=fish_source am | source")
         return
-    click.echo(f'eval "$({variable}={shell}_source anymoment)"')
+    click.echo(f'eval "$(_ANYMOMENT_COMPLETE={shell}_source anymoment)"')
+    click.echo(f'eval "$(_AM_COMPLETE={shell}_source am)"')
 
 
 @events.command("batch")
