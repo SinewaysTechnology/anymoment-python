@@ -1,5 +1,7 @@
 """Agent-facing CLI: JSON fields, dry-run, batch, schema, and env login."""
 
+from anymoment import __version__
+
 import json
 from datetime import datetime, timezone
 from unittest.mock import MagicMock
@@ -10,6 +12,10 @@ from anymoment.cli.commands import cli
 from anymoment.dates import resolve_window
 
 from tests.support import CALENDAR_ID, EVENT_ID, EXIT_AUTH, EXIT_OK, EXIT_USAGE
+
+
+def test_package_version_is_2():
+    assert __version__ == "2.0.0"
 
 
 def test_natural_windows_are_stable():
