@@ -58,3 +58,37 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
+addopts = ["-m", "not live", "--strict-markers", "-ra"]
+markers = [
+    "live: read-only smoke against a real AnyMoment API (ANYMOMENT_BASE_URL and ANYMOMENT_TEST_TOKEN)",
+]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+src = ["anymoment", "tests"]
+
+[tool.ruff.lint]
+# Pyflakes and syntax errors. Style-only rules stay off until the 2.0 rewrite.
+select = ["E9", "F"]
+
+[tool.ruff.lint.per-file-ignores]
+# Click registers one callback per group; those functions intentionally reuse names.
+# F401/F541/F841 here are pre-existing and stay until the 2.0 rewrite.
+"anymoment/cli/commands.py" = ["F811", "F401", "F541", "F841"]
+"anymoment/token_manager.py" = ["F401", "F841"]
+
+[tool.mypy]
+python_version = "3.10"
+files = ["anymoment"]
+ignore_missing_imports = true
+warn_unused_configs = true
+pretty = true
+show_error_codes = true
+# Click command callbacks are registered per group and reuse function names.
+disable_error_code = ["no-redef"]
+
+[[tool.mypy.overrides]]
+module = "anymoment.client"
+# Query dicts are inferred too narrowly (str vs bool or int). Tighten the annotations in 2.0.
+disable_error_code = ["assignment"]

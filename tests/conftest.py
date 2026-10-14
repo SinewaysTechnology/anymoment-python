@@ -1,12 +1,9 @@
 """Pytest fixtures for AnyMoment tests."""
 
 import json
-from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
-
-from anymoment.client import Client
 
 
 @pytest.fixture
@@ -17,7 +14,7 @@ def mock_token_file(tmp_path, monkeypatch):
     preventing tests from reading or writing real user tokens.
     """
     token_dir = tmp_path / ".anymoment"
-    token_dir.mkdir()
+    token_dir.mkdir(exist_ok=True)
     token_file = token_dir / "tokens.json"
     
     # Patch the token file path at module level to ensure all imports use it
@@ -39,7 +36,7 @@ def mock_config_file(tmp_path, monkeypatch):
     preventing tests from reading or writing real user configuration.
     """
     config_dir = tmp_path / ".anymoment"
-    config_dir.mkdir()
+    config_dir.mkdir(exist_ok=True)
     config_file = config_dir / "config.json"
     
     # Patch the config file path at module level to ensure all imports use it

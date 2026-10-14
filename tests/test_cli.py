@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from click.testing import CliRunner
 
-from anymoment.cli.commands import cli, get_client
+from anymoment.cli.commands import cli
 
 
 @pytest.fixture
@@ -121,7 +121,7 @@ def test_calendars_list(runner, mock_client, sample_calendar, mock_token_file):
     
     result = runner.invoke(cli, ["calendars", "list"])
     if result.exit_code != 0:
-        print(f"\n=== DEBUG INFO ===")
+        print("\n=== DEBUG INFO ===")
         print(f"Exit code: {result.exit_code}")
         print(f"Output:\n{result.output}")
         if result.exception:
@@ -158,14 +158,14 @@ def test_calendars_get(runner, mock_client, sample_calendar, mock_token_file):
 def test_events_create(runner, mock_client, sample_event, mock_token_file):
     """Test events create command."""
     # Use mock_token_file to ensure we're not reading real tokens
-    mock_client.create_event_from_text.return_value = sample_event
-    
+    mock_client.extract_and_create_events.return_value = sample_event
+
     result = runner.invoke(
         cli,
         ["events", "create", "Every Monday at 10 AM"],
     )
     assert result.exit_code == 0
-    mock_client.create_event_from_text.assert_called_once()
+    mock_client.extract_and_create_events.assert_called_once()
 
 
 def test_events_list(runner, mock_client, sample_event, mock_token_file):

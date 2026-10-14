@@ -1,0 +1,12 @@
+{
+  "message": "Events removed from the calendar",
+  "sync_warnings": [
+    {
+      "reason": "trial_paused",
+      "event_name": "Team standup",
+      "calendar_name": "Work",
+      "user_message": "Saved Team standup on Work, but it was not sent to the calendar server.",
+      "next_step": "Upgrade"
+    }
+  ]
+}

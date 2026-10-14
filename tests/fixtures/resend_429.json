@@ -1,0 +1,4 @@
+{
+  "retry_after_seconds": 60,
+  "user_message": "Please wait before requesting another verification email."
+}

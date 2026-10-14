@@ -1,13 +1,10 @@
 """Tests for token_manager module."""
 
 import json
-import time
 from datetime import datetime, timedelta, timezone
 
 import jwt
-import pytest
 
-from anymoment.exceptions import TokenError
 from anymoment.token_manager import (
     clear_all_tokens,
     delete_token,
