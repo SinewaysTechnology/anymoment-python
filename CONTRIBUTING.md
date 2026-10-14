@@ -22,7 +22,7 @@ That runs the existing unit tests plus the contract tests. It does not call the 
 - `agenda_batch.json`, `link_event.json`, and the event fields follow the public OpenAPI models (`AdvancedEventInstanceBatchResponse`, `EventInstanceFailure`, `AdvancedRecurrentEventOutput`, `CalendarEventLinkOutputWithWarnings`, `GoogleExportWarning`).
 - Resend-verification status bodies, CalDAV `{code, message, next_step}` errors, and `sync_warnings` items are the shapes from the API source. The published schema leaves those bodies open (`additionalProperties` or an empty schema).
 
-`tests/test_contract_client.py` and `tests/test_cli_contract.py` encode the 2.0 client and CLI behavior. The HTTP client is `requests`, so those tests mock with `responses`. `tests/test_http_replay.py` replays the same JSON fixtures through `respx` for the httpx transport.
+`tests/test_contract_client.py` and `tests/test_cli_contract.py` encode the 2.0 client and CLI behavior. The HTTP client is `requests`, so those tests mock with `responses`. `tests/test_http_replay.py` replays the same JSON fixtures with `respx` and `httpx` to check that the bodies stay valid. The SDK does not use httpx.
 
 The 2.0 contract tests in `tests/test_contract_client.py` and `tests/test_cli_contract.py` are expected to pass. `pending()` is still `pytest.mark.xfail(strict=True)`. Use it only for a behavior that is intentionally not built yet, and delete the marker in the same change that implements it. An unexpected pass fails CI.
 

@@ -121,5 +121,15 @@ jobs:
 
       - name: Build and twine check
         run: |
-          python -m build
+          python -m build --sdist --wheel
+          python - <<'PY'
+          from pathlib import Path
+          dist = Path("dist")
+          wheels = sorted(dist.glob("*.whl"))
+          sdists = sorted(dist.glob("*.tar.gz"))
+          print("wheel:", [path.name for path in wheels])
+          print("sdist:", [path.name for path in sdists])
+          if len(wheels) != 1 or len(sdists) != 1:
+              raise SystemExit("Build must produce exactly one wheel and one sdist.")
+          PY
           twine check dist/*

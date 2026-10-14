@@ -74,11 +74,16 @@ def test_ambiguous_calendar_does_not_prompt_without_a_tty(monkeypatch, mock_toke
 def test_completion_snippets():
     runner = CliRunner()
     bash = runner.invoke(cli, ["completion", "bash"])
+    zsh = runner.invoke(cli, ["completion", "zsh"])
     fish = runner.invoke(cli, ["completion", "fish"])
     assert bash.exit_code == EXIT_OK
-    assert "_ANYMOMENT_COMPLETE=bash_source" in bash.stdout
+    assert "_ANYMOMENT_COMPLETE=bash_source anymoment" in bash.stdout
+    assert "_AM_COMPLETE=bash_source am" in bash.stdout
+    assert zsh.exit_code == EXIT_OK
+    assert "_AM_COMPLETE=zsh_source am" in zsh.stdout
     assert fish.exit_code == EXIT_OK
-    assert "fish_source" in fish.stdout
+    assert "_ANYMOMENT_COMPLETE=fish_source anymoment" in fish.stdout
+    assert "_AM_COMPLETE=fish_source am" in fish.stdout
 
 
 def test_read_only_agenda_line(monkeypatch, mock_token_file):
