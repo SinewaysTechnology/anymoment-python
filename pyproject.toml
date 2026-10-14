@@ -4,10 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "anymoment"
-version = "1.0.0"
+version = "2.0.0"
 description = "Python SDK and CLI for AnyMoment API - Create and manage your schedule with natural language, write moments the way you think them."
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.10"
 license = {text = "MIT"}
 authors = [
     {name = "David Jonas @ Sineways Technology", email = "info@sineways.tech"}
@@ -19,11 +19,10 @@ classifiers = [
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Software Development :: Libraries :: Python Modules",
     "Topic :: Office/Business :: Scheduling",
 ]
@@ -38,10 +37,12 @@ dependencies = [
 [project.optional-dependencies]
 cli = [
     "click>=8.0.0",
+    "rich>=13.0.0",
 ]
 
 [project.scripts]
 anymoment = "anymoment.cli.commands:cli"
+am = "anymoment.cli.commands:cli"
 
 [project.urls]
 Homepage = "https://anymoment.sineways.tech"

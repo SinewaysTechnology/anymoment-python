@@ -9,14 +9,17 @@ from anymoment.config import get_api_url
 from anymoment.exceptions import (
     AnyMomentException,
     AuthenticationError,
-    NotFoundError,
-    ServerError,
-    ValidationError,
+    exception_for_status,
+    parse_error_payload,
 )
+from anymoment.caldav import CalDavClient
+from anymoment.endpoints import EndpointsMixin
+from anymoment.google import GoogleAPI
+from anymoment.models import AgendaResult, agenda_result, mutation_result
 from anymoment.token_manager import get_token, save_token
 
 
-class Client:
+class Client(EndpointsMixin):
     """Client for interacting with the AnyMoment API."""
     
     DEFAULT_API_URL = "https://api.anymoment.sineways.tech"
@@ -33,6 +36,16 @@ class Client:
         self.api_url = self.api_url.rstrip("/")
         self._token = token
         self._session = requests.Session()
+
+    @property
+    def google(self) -> GoogleAPI:
+        """Google account, sync health, quarantine, and sync status calls."""
+        return GoogleAPI(self)
+
+    @property
+    def caldav(self) -> CalDavClient:
+        """Experimental CalDAV API. Remote auth failures do not refresh the session token."""
+        return CalDavClient(self)
     
     def _get_token(self) -> Optional[str]:
         """Get authentication token."""
@@ -53,39 +66,42 @@ class Client:
             headers["x-auth-token"] = token
         return headers
     
+    def _read_payload(self, response: requests.Response) -> Any:
+        """Return parsed JSON, or None when the body is not JSON."""
+        try:
+            return response.json()
+        except ValueError:
+            return None
+
+    def _parsed_error(self, response: requests.Response):
+        return parse_error_payload(
+            self._read_payload(response),
+            response.text or "",
+            response.status_code,
+            response.headers,
+        )
+
+    def _should_refresh(self, path: str, response: requests.Response) -> bool:
+        """Refresh only a real AnyMoment session 401.
+
+        CalDAV auth_failed, any /caldav 401, and token login/extend 401s
+        are credential failures. Refreshing the session token cannot fix them.
+        """
+        normalized = path.split("?", 1)[0]
+        if normalized.startswith("/caldav") or normalized.startswith("/auth/token"):
+            return False
+        parsed = self._parsed_error(response)
+        return parsed.code != "auth_failed"
+
     def _handle_response(self, response: requests.Response) -> Any:
         """Handle API response and raise appropriate exceptions."""
-        if response.status_code == 200 or response.status_code == 201:
-            # Try to parse JSON, return text if not JSON
+        if 200 <= response.status_code < 300:
             try:
                 return response.json()
             except ValueError:
                 return response.text
-        
-        # Handle errors
-        error_detail = "Unknown error"
-        try:
-            error_data = response.json()
-            if isinstance(error_data, dict):
-                error_detail = error_data.get("detail", str(error_data))
-            else:
-                error_detail = str(error_data)
-        except ValueError:
-            error_detail = response.text or f"HTTP {response.status_code}"
-        
-        if response.status_code == 401:
-            raise AuthenticationError(error_detail)
-        elif response.status_code == 404:
-            raise NotFoundError(error_detail)
-        elif response.status_code == 400:
-            raise ValidationError(error_detail)
-        elif response.status_code >= 500:
-            raise ServerError(error_detail, status_code=response.status_code)
-        else:
-            raise AnyMomentException(
-                error_detail,
-                status_code=response.status_code,
-            )
+
+        raise exception_for_status(response.status_code, self._parsed_error(response))
     
     def _request(
         self,
@@ -109,12 +125,13 @@ class Client:
                 timeout=30,
             )
             
-            # Handle 401 with token refresh
-            if response.status_code == 401 and retry_on_auth_error:
-                # Try to refresh token
+            if (
+                response.status_code == 401
+                and retry_on_auth_error
+                and self._should_refresh(path, response)
+            ):
                 try:
                     self.refresh_token()
-                    # Retry once with new token
                     headers = self._get_headers()
                     response = self._session.request(
                         method=method,
@@ -125,11 +142,10 @@ class Client:
                         timeout=30,
                     )
                 except Exception:
-                    # Refresh failed, raise auth error
                     pass
-            
+
             return self._handle_response(response)
-        except (AuthenticationError, NotFoundError, ValidationError, ServerError, AnyMomentException):
+        except AnyMomentException:
             raise
         except requests.exceptions.RequestException as e:
             raise AnyMomentException(f"Request failed: {e}")
@@ -210,7 +226,7 @@ class Client:
         calendar_ids: Optional[List[str]] = None,
         use_cache: bool = True,
         include_webhooks: bool = False,
-    ) -> List[Dict[str, Any]]:
+    ) -> AgendaResult:
         """
         Get events and their instances within a time window (agenda).
 
@@ -222,7 +238,8 @@ class Client:
             include_webhooks: Include webhooks in each event payload (default False).
 
         Returns:
-            List of dicts with keys 'event' and 'instances'.
+            AgendaResult with .events and .failures. A legacy list body is
+            exposed as events with an empty failures list.
         """
         params = {
             "start": self._datetime_to_iso(start),
@@ -232,7 +249,7 @@ class Client:
         }
         if calendar_ids is not None:
             params["calendar_ids"] = calendar_ids
-        return self._request("GET", "/agenda", params=params)
+        return agenda_result(self._request("GET", "/agenda", params=params))
 
     def search_events(
         self,
@@ -453,7 +470,7 @@ class Client:
             data["name"] = name
         if description is not None:
             data["description"] = description
-        return self._request("PUT", f"/events/{event_id}", json_data=data)
+        return mutation_result(self._request("PUT", f"/events/{event_id}", json_data=data))
     
     def update_event_from_text(
         self,
@@ -473,17 +490,19 @@ class Client:
         }
         if description is not None:
             data["description"] = description
-        return self._request(
-            "PUT", f"/events/{event_id}/from-recurrence-text", json_data=data
+        return mutation_result(
+            self._request(
+                "PUT", f"/events/{event_id}/from-recurrence-text", json_data=data
+            )
         )
     
-    def delete_event(self, event_id: str) -> None:
-        """Delete an event."""
-        self._request("DELETE", f"/events/{event_id}")
+    def delete_event(self, event_id: str) -> Any:
+        """Delete an event. Returns message and sync_warnings when the API sends them."""
+        return mutation_result(self._request("DELETE", f"/events/{event_id}"))
     
-    def toggle_event(self, event_id: str) -> dict[str, Any]:
+    def toggle_event(self, event_id: str) -> Any:
         """Toggle event active status."""
-        return self._request("PATCH", f"/events/{event_id}/toggle")
+        return mutation_result(self._request("PATCH", f"/events/{event_id}/toggle"))
     
     def get_event_instances(
         self,
@@ -529,10 +548,12 @@ class Client:
         event_ids: List[str],
     ) -> Dict[str, Any]:
         """Remove multiple events from a calendar (unlink only; events are not deleted)."""
-        return self._request(
-            "POST",
-            f"/calendars/{calendar_id}/events/batch-unlink",
-            json_data={"event_ids": event_ids},
+        return mutation_result(
+            self._request(
+                "POST",
+                f"/calendars/{calendar_id}/events/batch-unlink",
+                json_data={"event_ids": event_ids},
+            )
         )
 
     def link_event_to_calendar(
@@ -548,16 +569,20 @@ class Client:
             data["display_order"] = display_order
         if color_override is not None:
             data["color_override"] = color_override
-        return self._request(
-            "POST",
-            f"/calendars/{calendar_id}/events/{event_id}",
-            json_data=data,
+        return mutation_result(
+            self._request(
+                "POST",
+                f"/calendars/{calendar_id}/events/{event_id}",
+                json_data=data,
+            )
         )
 
     def unlink_event_from_calendar(
         self,
         calendar_id: str,
         event_id: str,
-    ) -> None:
-        """Unlink an event from a calendar."""
-        self._request("DELETE", f"/calendars/{calendar_id}/events/{event_id}")
+    ) -> Any:
+        """Unlink an event from a calendar. Returns sync_warnings when the API sends them."""
+        return mutation_result(
+            self._request("DELETE", f"/calendars/{calendar_id}/events/{event_id}")
+        )

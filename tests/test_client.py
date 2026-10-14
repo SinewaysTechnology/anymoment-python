@@ -214,7 +214,8 @@ def test_get_agenda(mock_session_class, mock_api_response):
     client = Client(api_url="https://api.anymoment.sineways.tech", token="test-token")
     result = client.get_agenda(start="2025-02-03T00:00:00Z", end="2025-02-09T23:59:59Z")
 
-    assert result == agenda_response
+    assert result.events == agenda_response
+    assert result.failures == []
     mock_session.request.assert_called_once()
     call_kw = mock_session.request.call_args[1]
     assert call_kw["method"] == "GET"

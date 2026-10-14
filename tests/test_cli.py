@@ -48,8 +48,7 @@ def test_auth_login(runner, mock_token_file):
         
         result = runner.invoke(
             cli,
-            ["auth", "login"],
-            input="test@example.com\ntest-password\n",
+            ["auth", "login", "--email", "test@example.com", "--password", "test-password"],
         )
         
         assert result.exit_code == 0

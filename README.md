@@ -79,6 +79,19 @@ instances = client.get_event_instances(
 )
 ```
 
+## Version 2.0
+
+`get_agenda` returns an object with `.events` and `.failures`. Delete, unlink, update, toggle, and link return their warning fields instead of dropping the response body. Errors expose `user_message`, `next_step`, `code`, and `retry_after`. The migration notes are in [CHANGELOG.md](CHANGELOG.md).
+
+```bash
+anymoment agenda "next week" --json
+anymoment auth login --email you@example.com --password "$ANYMOMENT_PASSWORD"
+# or skip the prompt with ANYMOMENT_TOKEN
+anymoment schema
+```
+
+`anymoment` and `am` are the same command. `a` is agenda, `ls` lists calendars, and `rm` deletes an event.
+
 ## Configuration
 
 ### Environment Variables
@@ -86,6 +99,9 @@ instances = client.get_event_instances(
 - `ANYMOMENT_BASE_URL` - Default API base URL (default: `https://api.anymoment.sineways.tech`)
 - `ANYMOMENT_DEFAULT_CALENDAR` - Default calendar ID
 - `ANYMOMENT_DEFAULT_TIMEZONE` - Default timezone
+- `ANYMOMENT_TOKEN` - Session token for non-interactive use. No login prompt.
+- `ANYMOMENT_PROFILE` - Config profile name (`--profile` sets the same value)
+- `NO_COLOR` - Disable terminal color
 
 ### Config File
 
@@ -115,6 +131,13 @@ anymoment auth login [--host URL]
 
 # Logout (clear token)
 anymoment auth logout [--host URL]
+
+# Non-interactive login
+anymoment auth login --email you@example.com --password "$ANYMOMENT_PASSWORD"
+# or export ANYMOMENT_TOKEN
+
+# Send the verification email again
+anymoment auth resend-verification --json
 
 # List all tokens
 anymoment tokens list
@@ -198,6 +221,13 @@ anymoment events export <id> [--format ics|csv] [--from DATE] [--to DATE] [--out
 ### Agenda & Search
 
 ```bash
+# One call. Prints the resolved UTC window, then the events.
+anymoment agenda "tomorrow 3pm"
+anymoment agenda "next fri" --json
+anymoment today
+anymoment week
+anymoment next
+
 # List events and instances in a time window (agenda)
 anymoment agenda list [--start ISO] [--end ISO] [--calendar ID] [--no-cache] [--webhooks]
 
@@ -217,8 +247,18 @@ anymoment users me
 - `--host, -h URL` - Override API host URL (env: `ANYMOMENT_BASE_URL`)
 - `--raw` - Output full JSON response
 - `--pipe` - Output only IDs (for piping/chaining)
+- `--json` - One compact JSON object on stdout (`"v": 1`)
+- `--jsonl` - One compact JSON object per line
+- `--fields a,b` - Keep these JSON fields, plus `v`
+- `--dry-run` - Show a mutation without sending it. Create uses the preview endpoint.
+- `--idempotency-key KEY` - Local replay cache. The API has no idempotency header.
+- `--profile NAME` - Use `~/.anymoment/config.NAME.json`
 - `--timezone, -z TZ` - Override timezone for this command
-- `--calendar, -c ID` - Specify calendar ID (or use default from config)
+- `--calendar, -c ID` - Specify calendar ID or name (or use default from config)
+
+Machine-readable errors go to stderr when `--json` or `--jsonl` is set. `anymoment schema` lists commands and exit codes. `anymoment completion bash` prints a shell snippet.
+
+Exit codes: 0 ok, 2 usage, 3 auth, 4 not found, 5 conflict, 6 rate limited, 7 remote or sync error.
 
 ## Library API Reference
 
@@ -235,6 +275,10 @@ client = Client(api_url="https://api.anymoment.sineways.tech", token="optional-t
 - `client.login(email, password)` - Authenticate and get token
 - `client.refresh_token()` - Refresh current token
 - `client.get_user_info()` - Get current user information
+- `client.resend_verification()` - Send the verification email again
+- `client.signup(email, password, ...)` - Create an account
+- `client.google` - Google accounts, sync health, quarantine, and sync status
+- `client.caldav` - Experimental CalDAV. Remote auth failures do not refresh the session token.
 
 #### Calendars
 

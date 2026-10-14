@@ -1,15 +1,10 @@
-"""SDK contract for the shapes in tests/fixtures.
-
-Passing tests cover behavior 1.0 already matches.
-`pending` tests are the 2.0 checklist: they fail until the client grows
-the result objects, the error fields, and resend_verification().
-"""
+"""SDK contract for the shapes in tests/fixtures."""
 
 import pytest
 import responses
 
 from anymoment.client import Client
-from anymoment.exceptions import AuthenticationError
+from anymoment.exceptions import AuthenticationError, ConflictError, RateLimitError
 
 from tests.support import (
     API,
@@ -18,7 +13,6 @@ from tests.support import (
     exception_type,
     field,
     load_fixture,
-    pending,
     require_attr,
 )
 
@@ -81,7 +75,6 @@ def test_login_failure_does_not_refresh(mock_token_file):
         assert _calls(rsps, "/auth/token/extend") == []
 
 
-@pending("get_agenda returns an object with .events and .failures")
 def test_get_agenda_exposes_events_and_failures(client):
     body = load_fixture("agenda_batch.json")
     with responses.RequestsMock(assert_all_requests_are_fired=False) as rsps:
@@ -100,7 +93,6 @@ def test_get_agenda_exposes_events_and_failures(client):
     assert field(failures[0], "is_google_synced") is True
 
 
-@pending("top-level user_message and next_step are parsed, not stringified")
 def test_top_level_user_message_and_next_step(client):
     body = load_fixture("resend_502.json")
     with responses.RequestsMock(assert_all_requests_are_fired=False) as rsps:
@@ -114,7 +106,6 @@ def test_top_level_user_message_and_next_step(client):
     assert err.message == body["user_message"]
 
 
-@pending("CalDAV detail {code, message, next_step} maps onto code, user_message, and next_step")
 def test_caldav_error_fields(client):
     body = load_fixture("error_caldav.json")
     detail = body["detail"]
@@ -135,7 +126,6 @@ def test_caldav_error_fields(client):
     assert err.next_step == detail["next_step"]
 
 
-@pending("a CalDAV auth_failed 401 does not refresh the AnyMoment token")
 def test_caldav_auth_failed_does_not_refresh(client):
     body = load_fixture("error_caldav.json")
     with responses.RequestsMock(assert_all_requests_are_fired=False) as rsps:
@@ -151,7 +141,6 @@ def test_caldav_auth_failed_does_not_refresh(client):
         assert _calls(rsps, "/auth/token/extend") == []
 
 
-@pending("422 validation errors raise UnprocessableError and keep the detail list")
 def test_recorded_422_is_unprocessable(client):
     body = load_fixture("recorded_agenda_422.json")
     unprocessable = exception_type("UnprocessableError")
@@ -164,7 +153,6 @@ def test_recorded_422_is_unprocessable(client):
     assert err.details == body or field(err, "raw") == body or err.details.get("detail") == body["detail"]
 
 
-@pending("403 raises PermissionDeniedError with user_message")
 def test_forbidden_is_permission_denied(client):
     body = load_fixture("error_forbidden.json")
     denied = exception_type("PermissionDeniedError")
@@ -177,7 +165,6 @@ def test_forbidden_is_permission_denied(client):
     assert err.user_message == body["detail"]
 
 
-@pending("plain-text unverified login raises EmailNotVerifiedError")
 def test_unverified_login_is_its_own_error(mock_token_file):
     client = Client(api_url=API)
     not_verified = exception_type("EmailNotVerifiedError")
@@ -199,7 +186,6 @@ def test_unverified_login_is_its_own_error(mock_token_file):
     "fixture_name, expected",
     [("resend_200_sent.json", "sent"), ("resend_200_already_verified.json", "already_verified")],
 )
-@pending("resend_verification() returns the 200 {status} body")
 def test_resend_verification_ok(client, fixture_name, expected):
     body = load_fixture(fixture_name)
     with responses.RequestsMock(assert_all_requests_are_fired=False) as rsps:
@@ -212,7 +198,6 @@ def test_resend_verification_ok(client, fixture_name, expected):
     assert _status(result, body) == expected
 
 
-@pending("resend 429 raises RateLimitError with retry_after from retry_after_seconds")
 def test_resend_verification_rate_limit(client):
     body = load_fixture("resend_429.json")
     limited = exception_type("RateLimitError")
@@ -226,7 +211,6 @@ def test_resend_verification_rate_limit(client):
     assert err.user_message == body["user_message"]
 
 
-@pending("resend 502 raises an error with top-level user_message and next_step")
 def test_resend_verification_upstream(client):
     body = load_fixture("resend_502.json")
     with responses.RequestsMock(assert_all_requests_are_fired=False) as rsps:
@@ -239,7 +223,6 @@ def test_resend_verification_upstream(client):
     assert err.next_step == body["next_step"]
 
 
-@pending("update_event returns an object that carries .sync_warnings")
 def test_update_event_exposes_sync_warnings(client):
     body = load_fixture("event_with_sync_warnings.json")
     with responses.RequestsMock(assert_all_requests_are_fired=False) as rsps:
@@ -250,7 +233,6 @@ def test_update_event_exposes_sync_warnings(client):
     assert field(warnings[0], "event_name") == "Team standup"
 
 
-@pending("toggle_event returns an object that carries .sync_warnings")
 def test_toggle_event_exposes_sync_warnings(client):
     body = load_fixture("event_with_sync_warnings.json")
     with responses.RequestsMock(assert_all_requests_are_fired=False) as rsps:
@@ -260,7 +242,6 @@ def test_toggle_event_exposes_sync_warnings(client):
     assert field(warnings[0], "reason") == "trial_paused"
 
 
-@pending("delete_event returns the {message, sync_warnings} body instead of None")
 def test_delete_event_returns_sync_warnings(client):
     body = load_fixture("delete_event.json")
     with responses.RequestsMock(assert_all_requests_are_fired=False) as rsps:
@@ -271,7 +252,6 @@ def test_delete_event_returns_sync_warnings(client):
     assert field(warnings[0], "calendar_name") == "Work"
 
 
-@pending("unlink_event_from_calendar returns sync_warnings instead of None")
 def test_unlink_event_returns_sync_warnings(client):
     body = load_fixture("unlink_event.json")
     path = f"/calendars/{CALENDAR_ID}/events/{EVENT_ID}"
@@ -282,7 +262,6 @@ def test_unlink_event_returns_sync_warnings(client):
     assert field(warnings[0], "user_message")
 
 
-@pending("batch_remove_events_from_calendar returns an object with .sync_warnings")
 def test_batch_unlink_exposes_sync_warnings(client):
     body = load_fixture("batch_unlink.json")
     path = f"/calendars/{CALENDAR_ID}/events/batch-unlink"
@@ -293,7 +272,24 @@ def test_batch_unlink_exposes_sync_warnings(client):
     assert field(warnings[0], "next_step") == "Upgrade"
 
 
-@pending("link_event_to_calendar returns an object with .google_export_warnings")
+def test_update_event_from_text_exposes_sync_warnings(client):
+    body = load_fixture("event_with_sync_warnings.json")
+    with responses.RequestsMock(assert_all_requests_are_fired=False) as rsps:
+        rsps.add(
+            responses.PUT,
+            f"{API}/events/{EVENT_ID}/from-recurrence-text",
+            json=body,
+            status=200,
+        )
+        result = client.update_event_from_text(
+            EVENT_ID,
+            recurrence_text="Every weekday at 9",
+            name="Team standup",
+        )
+    warnings = require_attr(result, "sync_warnings")
+    assert field(warnings[0], "reason") == "trial_paused"
+
+
 def test_link_event_exposes_export_warnings(client):
     body = load_fixture("link_event.json")
     path = f"/calendars/{CALENDAR_ID}/events/{EVENT_ID}"
@@ -307,7 +303,6 @@ def test_link_event_exposes_export_warnings(client):
     assert field(link, "event_id") == EVENT_ID
 
 
-@pending("any 2xx response is success, including 202")
 def test_accepted_status_is_success(client):
     body = {"id": EVENT_ID, "name": "Team standup"}
     with responses.RequestsMock(assert_all_requests_are_fired=False) as rsps:
@@ -319,3 +314,40 @@ def test_accepted_status_is_success(client):
         )
         result = client.create_event_from_text("Tomorrow at 9")
     assert field(result, "id") == EVENT_ID
+
+
+def test_conflict_error_reads_caldav_style_detail(client):
+    body = {
+        "detail": {
+            "code": "calendar_already_linked",
+            "message": "This calendar is already linked.",
+            "next_step": "Use the existing link.",
+        }
+    }
+    with responses.RequestsMock(assert_all_requests_are_fired=False) as rsps:
+        rsps.add(
+            responses.POST,
+            f"{API}/calendars/{CALENDAR_ID}/events/{EVENT_ID}",
+            json=body,
+            status=409,
+        )
+        with pytest.raises(ConflictError) as exc_info:
+            client.link_event_to_calendar(CALENDAR_ID, EVENT_ID)
+    err = exc_info.value
+    assert err.status_code == 409
+    assert err.code == "calendar_already_linked"
+    assert err.user_message == "This calendar is already linked."
+    assert err.next_step == "Use the existing link."
+    assert err.message == err.user_message
+
+
+def test_rate_limit_reads_retry_after_seconds(client):
+    body = {"retry_after_seconds": 30, "user_message": "Slow down."}
+    with responses.RequestsMock(assert_all_requests_are_fired=False) as rsps:
+        rsps.add(responses.GET, f"{API}/calendars", json=body, status=429)
+        with pytest.raises(RateLimitError) as exc_info:
+            client.list_calendars()
+    err = exc_info.value
+    assert err.status_code == 429
+    assert err.retry_after == 30
+    assert err.user_message == "Slow down."

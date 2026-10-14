@@ -24,24 +24,21 @@ That runs the existing unit tests plus the contract tests. It does not call the 
 
 `tests/test_contract_client.py` and `tests/test_cli_contract.py` encode the 2.0 client and CLI behavior. The HTTP client is `requests`, so those tests mock with `responses`. `tests/test_http_replay.py` replays the same JSON fixtures through `respx` for the httpx transport.
 
-Behavior the 1.0 SDK does not implement yet is marked `pytest.mark.xfail(strict=True)` with a `2.0:` reason. Strict mode means an unexpected pass fails CI. When you implement that row, delete the marker in the same change. `pytest -ra` prints the remaining reasons. That list is the checklist.
+The 2.0 contract tests in `tests/test_contract_client.py` and `tests/test_cli_contract.py` are expected to pass. `pending()` is still `pytest.mark.xfail(strict=True)`. Use it only for a behavior that is intentionally not built yet, and delete the marker in the same change that implements it. An unexpected pass fails CI.
 
-Target CLI exit codes:
+CLI exit codes:
 
 | Code | Meaning |
 | --- | --- |
-| 0 | Success |
-| 2 | Usage |
-| 3 | Auth, needs login |
+| 0 | Success, including a payload that contains `failures` or `sync_warnings` |
+| 2 | Usage, including HTTP 400 and 422 |
+| 3 | Auth: HTTP 401, unverified email, or a missing token |
 | 4 | Not found |
-| 5 | Validation |
-| 6 | Permission or read-only |
-| 7 | Rate limited |
-| 8 | Partial success (failures or warnings) |
-| 9 | Upstream or server |
-| 10 | Network |
+| 5 | Conflict |
+| 6 | Rate limited |
+| 7 | Remote or sync error: HTTP 403, 5xx, network, and CalDAV failures |
 
-`--json` prints one JSON object on stdout with `"v": 1`. Agenda includes `events` and `failures`. Errors with `--json` go to stderr as `{"error": {"code", "status", "user_message", "next_step", "retry_after"}}`.
+`--json` prints one compact JSON object on stdout with `"v": 1`. `--jsonl` prints one object per line. `--fields` keeps the named keys. Agenda includes `events` and `failures`. Errors with `--json` go to stderr as `{"error": {"code", "status", "user_message", "next_step", "retry_after"}}`.
 
 ### Lint, types, and the package build
 
@@ -52,7 +49,7 @@ python -m build
 twine check dist/*
 ```
 
-Ruff runs Pyflakes and syntax checks. Click command functions reuse names on purpose, so `F811` is ignored in `anymoment/cli/commands.py` only. Mypy ignores the Click redefinitions and the too-narrow query dicts in `anymoment/client.py`. Tighten those annotations in the 2.0 rewrite instead of widening this ignore.
+Ruff runs Pyflakes and syntax checks. Click command functions reuse names on purpose, so `F811` is ignored in `anymoment/cli/commands.py` only. Mypy ignores the Click redefinitions and the too-narrow query dicts in `anymoment/client.py`.
 
 ### Live smoke
 
