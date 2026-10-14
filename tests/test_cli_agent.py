@@ -17,7 +17,7 @@ from tests.support import CALENDAR_ID, EVENT_ID, EXIT_AUTH, EXIT_OK, EXIT_USAGE
 
 
 def test_package_version_is_2():
-    assert __version__ == "2.0.1"
+    assert __version__ == "2.1.0"
 
 
 def test_natural_windows_are_stable():

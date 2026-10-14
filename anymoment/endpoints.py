@@ -300,3 +300,96 @@ class EndpointsMixin:
             f"/refresh/calendars/{calendar_id}/changes",
             params={"since": since},
         )
+
+    def list_subscriptions(self, calendar_id: str) -> Any:
+        """List outgoing webhook subscriptions. The secret is not included."""
+        return self._request("GET", f"/calendars/{calendar_id}/subscriptions")
+
+    def create_subscription(
+        self,
+        calendar_id: str,
+        url: str,
+        event_types: list[str],
+        secret: Optional[str] = None,
+        occurrence_offset_seconds: Optional[int] = None,
+    ) -> Any:
+        """Create a subscription. A generated secret is returned once."""
+        data = _omit_none(
+            {
+                "url": url,
+                "secret": secret,
+                "event_types": event_types,
+                "occurrence_offset_seconds": occurrence_offset_seconds,
+            }
+        )
+        return self._request(
+            "POST",
+            f"/calendars/{calendar_id}/subscriptions",
+            json_data=data,
+        )
+
+    def get_subscription(self, calendar_id: str, subscription_id: str) -> Any:
+        """Get one subscription. The secret is not included."""
+        return self._request(
+            "GET",
+            f"/calendars/{calendar_id}/subscriptions/{subscription_id}",
+        )
+
+    def update_subscription(
+        self,
+        calendar_id: str,
+        subscription_id: str,
+        url: Optional[str] = None,
+        secret: Optional[str] = None,
+        event_types: Optional[list[str]] = None,
+        occurrence_offset_seconds: Optional[int] = None,
+        is_active: Optional[bool] = None,
+    ) -> Any:
+        """Update a subscription. A replacement secret is stored and not returned."""
+        data = _omit_none(
+            {
+                "url": url,
+                "secret": secret,
+                "event_types": event_types,
+                "occurrence_offset_seconds": occurrence_offset_seconds,
+                "is_active": is_active,
+            }
+        )
+        return self._request(
+            "PATCH",
+            f"/calendars/{calendar_id}/subscriptions/{subscription_id}",
+            json_data=data,
+        )
+
+    def delete_subscription(self, calendar_id: str, subscription_id: str) -> Any:
+        """Delete a subscription."""
+        return self._request(
+            "DELETE",
+            f"/calendars/{calendar_id}/subscriptions/{subscription_id}",
+        )
+
+    def list_subscription_deliveries(
+        self,
+        calendar_id: str,
+        subscription_id: str,
+        limit: Optional[int] = None,
+    ) -> Any:
+        """Delivery log for one subscription, newest first."""
+        params = _omit_none({"limit": limit})
+        return self._request(
+            "GET",
+            f"/calendars/{calendar_id}/subscriptions/{subscription_id}/deliveries",
+            params=params or None,
+        )
+
+    def replay_subscription_delivery(
+        self,
+        calendar_id: str,
+        subscription_id: str,
+        delivery_id: str,
+    ) -> Any:
+        """Queue a new delivery with the same payload. The original row is unchanged."""
+        return self._request(
+            "POST",
+            f"/calendars/{calendar_id}/subscriptions/{subscription_id}/deliveries/{delivery_id}/replay",
+        )

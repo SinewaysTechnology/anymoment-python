@@ -6,6 +6,12 @@ from unittest.mock import MagicMock
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _isolate_api_key_env(monkeypatch):
+    """Keep a developer ANYMOMENT_API_KEY from changing token-based tests."""
+    monkeypatch.delenv("ANYMOMENT_API_KEY", raising=False)
+
+
 @pytest.fixture
 def mock_token_file(tmp_path, monkeypatch):
     """Mock token file location.

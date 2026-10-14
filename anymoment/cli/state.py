@@ -113,6 +113,13 @@ def global_options() -> list[click.Option]:
             callback=remember,
             help="Local key. Repeating it returns the first result without calling the API again.",
         ),
+        click.Option(
+            ["--api-key"],
+            expose_value=False,
+            is_eager=True,
+            callback=remember,
+            help="API key. Used instead of a saved login. Env: ANYMOMENT_API_KEY.",
+        ),
     ]
 
 
@@ -250,7 +257,7 @@ def write_error(exc: BaseException, context: str = "Operation") -> None:
     click.echo(f"[ERROR] {message}", err=True)
     if payload["next_step"]:
         click.echo(payload["next_step"], err=True)
-    if isinstance(exc, AuthenticationError):
+    if isinstance(exc, AuthenticationError) and not payload["next_step"]:
         click.echo("Run 'anymoment auth login' to authenticate.", err=True)
 
 

@@ -133,6 +133,61 @@ class RateLimitError(AnyMomentException):
         super().__init__(message, status_code=status_code, **kwargs)
 
 
+class InvalidApiKeyError(AuthenticationError):
+    """401 invalid_api_key. The key is unknown."""
+
+
+class ApiKeyRevokedError(AuthenticationError):
+    """401 api_key_revoked. The key was revoked."""
+
+
+class ApiKeyExpiredError(AuthenticationError):
+    """401 api_key_expired. The key is past its expiry."""
+
+
+class ApiKeyNotPermittedError(PermissionDeniedError):
+    """403 api_key_not_permitted. This route does not accept an API key."""
+
+
+class CalendarNotAllowedError(PermissionDeniedError):
+    """403 calendar_not_allowed. The key is not allowed to use this calendar."""
+
+
+# Shown when the API body has no next_step of its own.
+API_KEY_NEXT_STEPS = {
+    "invalid_api_key": (
+        "Check the key in AnyMoment settings. It starts with am_live_, then eight "
+        "hex characters, an underscore, and the secret. Set ANYMOMENT_API_KEY or pass --api-key."
+    ),
+    "api_key_revoked": (
+        "This key was revoked. Create a new key in AnyMoment settings and replace ANYMOMENT_API_KEY."
+    ),
+    "api_key_expired": (
+        "This key has expired. Create a new key in AnyMoment settings and replace ANYMOMENT_API_KEY."
+    ),
+    "api_key_not_permitted": (
+        "API keys cannot call sign-in, account, or key-management routes. "
+        "Use am auth login for those. Use the key for calendars, events, and webhook subscriptions."
+    ),
+    "calendar_not_allowed": (
+        "This key cannot access that calendar. Choose a calendar the key allows."
+    ),
+}
+
+API_KEY_ERROR_TYPES = {
+    "invalid_api_key": (InvalidApiKeyError, {401}),
+    "api_key_revoked": (ApiKeyRevokedError, {401}),
+    "api_key_expired": (ApiKeyExpiredError, {401}),
+    "api_key_not_permitted": (ApiKeyNotPermittedError, {403}),
+    "calendar_not_allowed": (CalendarNotAllowedError, {403}),
+}
+
+CALENDAR_LIMITED_EVENTS_NEXT_STEP = (
+    "GET /events is not available for a calendar-limited key. "
+    "Pass a calendar id. The client calls GET /calendars/{calendar_id}/events."
+)
+
+
 class ServerError(AnyMomentException):
     """Raised when the server returns an error (500+), including 502."""
 
@@ -289,10 +344,18 @@ def parse_error_payload(
 
 def exception_for_status(status_code: int, parsed: ParsedError) -> AnyMomentException:
     """Map an HTTP status and a parsed body onto a typed error."""
+    next_step = parsed.next_step
+    if next_step is None and parsed.code in API_KEY_NEXT_STEPS:
+        next_step = API_KEY_NEXT_STEPS[parsed.code]
+    if status_code == 429 and next_step is None:
+        if parsed.retry_after is not None:
+            next_step = f"Wait {parsed.retry_after} seconds, then retry the request."
+        else:
+            next_step = "Wait, then retry the request."
     kwargs = {
         "code": parsed.code,
         "user_message": parsed.user_message,
-        "next_step": parsed.next_step,
+        "next_step": next_step,
         "retry_after": parsed.retry_after,
         "details": parsed.details,
         "raw": parsed.raw,
@@ -305,6 +368,9 @@ def exception_for_status(status_code: int, parsed: ParsedError) -> AnyMomentExce
         and "verify" in parsed.user_message.lower()
     ):
         return EmailNotVerifiedError(message, **kwargs)
+    mapped = API_KEY_ERROR_TYPES.get(parsed.code or "")
+    if mapped is not None and status_code in mapped[1]:
+        return mapped[0](message, **kwargs)
     if status_code == 401:
         return AuthenticationError(message, **kwargs)
     if status_code == 403:

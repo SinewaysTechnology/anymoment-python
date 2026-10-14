@@ -100,6 +100,66 @@ def test_mutation_warning_shapes():
     assert {"id", "calendar_id", "event_id", "added_at"} <= set(link["link"])
 
 
+def test_api_key_error_bodies_use_the_live_detail_object():
+    invalid = load_fixture("recorded_invalid_api_key_401.json")
+    assert invalid == {"detail": {"code": "invalid_api_key", "message": "Invalid API key."}}
+    for name in (
+        "api_key_revoked_401.json",
+        "api_key_expired_401.json",
+        "api_key_not_permitted_403.json",
+        "calendar_not_allowed_403.json",
+    ):
+        detail = load_fixture(name)["detail"]
+        assert {"code", "message"} <= set(detail)
+        assert isinstance(detail["code"], str)
+        assert isinstance(detail["message"], str)
+    limited = load_fixture("api_key_rate_limit_429.json")["detail"]
+    assert set(limited) == {"message", "retry_after_seconds"}
+    assert isinstance(limited["retry_after_seconds"], int)
+
+
+def test_subscription_and_delivery_shapes():
+    created = load_fixture("subscription_created.json")
+    listed = load_fixture("subscription.json")
+    delivery = load_fixture("delivery.json")
+    events = load_fixture("calendar_events.json")
+    subscription_fields = {
+        "id",
+        "calendar_id",
+        "url",
+        "event_types",
+        "occurrence_offset_seconds",
+        "is_active",
+        "created_at",
+        "updated_at",
+        "secret",
+    }
+    delivery_fields = {
+        "id",
+        "subscription_id",
+        "calendar_id",
+        "event_id",
+        "change_type",
+        "payload",
+        "occurrence_time",
+        "status",
+        "attempts",
+        "max_attempts",
+        "next_attempt_at",
+        "last_status_code",
+        "last_error",
+        "delivered_at",
+        "replay_of_id",
+        "created_at",
+    }
+    assert set(created) == subscription_fields
+    assert set(listed) == subscription_fields
+    assert created["secret"]
+    assert listed["secret"] is None
+    assert set(delivery) == delivery_fields
+    assert {"event", "link"} <= set(events[0])
+
+
 def test_unverified_login_body_is_plain_text():
     body = load_fixture("unverified_401.txt")
     assert isinstance(body, str)

@@ -86,9 +86,60 @@ instances = client.get_event_instances(
 )
 ```
 
-## Version 2.0
+## Version 2.1
 
-2.0.1 is the current release. It requires Python 3.10 or newer. The migration notes, including 2.0.1, 1.0.0, and 0.1.0, are in [CHANGELOG.md](CHANGELOG.md).
+2.1.0 is the current release. It requires Python 3.10 or newer. Migration notes are in [CHANGELOG.md](CHANGELOG.md).
+
+Create an API key in AnyMoment settings. The SDK and CLI do not create, rotate, or revoke keys. A key looks like `am_live_`, eight hex characters, an underscore, and a secret. Send it as `Authorization: Bearer`, pass `api_key=` to `Client`, or set `ANYMOMENT_API_KEY`. `--api-key` does the same thing in the CLI. When a key is set, it is used instead of a saved login or `ANYMOMENT_TOKEN`.
+
+```python
+from anymoment import Client
+
+client = Client(api_key="am_live_0123abcd_secret")
+calendars = client.list_calendars()
+```
+
+```bash
+export ANYMOMENT_API_KEY="am_live_0123abcd_secret"
+am auth status
+am calendars list --json
+am events list --calendar <calendar-id> --json
+```
+
+`am auth status` shows whether the command is using an API key, `ANYMOMENT_TOKEN`, or a saved login. It prints the key prefix (`am_live_` plus the eight hex characters) and never prints the secret.
+
+Keys can allow `events:read`, `events:write`, `calendars:read`, and `webhooks:manage`. A key can also be limited to specific calendars. A calendar-limited key cannot call `GET /events`. Pass a calendar id and the client calls `GET /calendars/{calendar_id}/events`. Each item is the event plus its link.
+
+| Status | Code | What to do |
+| --- | --- | --- |
+| 401 | `invalid_api_key` | Check the full key from AnyMoment settings. |
+| 401 | `api_key_revoked` | The key was revoked. Create a new one in settings. |
+| 401 | `api_key_expired` | The key has expired. Create a new one in settings. |
+| 403 | `api_key_not_permitted` | API keys cannot call sign-in, account, or key-management routes. Use `am auth login` for those. |
+| 403 | `calendar_not_allowed` | The key cannot access that calendar. |
+| 429 | | Wait `retry_after` seconds, then retry. |
+
+Webhook subscriptions live on a calendar: create, read, update, delete, list deliveries, and replay one delivery. A generated signing secret is returned once, on create. Store it. Later responses do not include it.
+
+AnyMoment signs each delivery with hex HMAC-SHA256 over `{timestamp}.{raw body}`. The headers are `X-AnyMoment-Signature`, `X-AnyMoment-Timestamp`, and `X-AnyMoment-Delivery`. Pass the raw body bytes to `verify_webhook`. Re-encoding the JSON will not match.
+
+```python
+from anymoment import verify_webhook
+
+def endpoint(raw_body: bytes, headers: dict) -> None:
+    if not verify_webhook(raw_body, headers, secret):
+        raise ValueError("signature did not match")
+```
+
+```bash
+am calendars subscriptions create <calendar-id> \
+  --url https://example.com/hooks/anymoment \
+  --event-type event.updated
+am calendars subscriptions deliveries <calendar-id> <subscription-id> --json
+am calendars subscriptions replay <calendar-id> <subscription-id> <delivery-id>
+```
+
+## Version 2.0
 
 `get_agenda` returns an object with `.events` and `.failures`. It is not a list. Delete, unlink, update, toggle, and link return their warning fields (`.message`, `.sync_warnings`, or `.google_export_warnings`) instead of dropping the response body.
 
@@ -118,6 +169,7 @@ anymoment completion bash
 - `ANYMOMENT_DEFAULT_CALENDAR` - Default calendar ID
 - `ANYMOMENT_DEFAULT_TIMEZONE` - Default timezone
 - `ANYMOMENT_TOKEN` - Session token for non-interactive use. No login prompt.
+- `ANYMOMENT_API_KEY` - API key. Used instead of a saved login or `ANYMOMENT_TOKEN` when set.
 - `ANYMOMENT_PROFILE` - Config profile name (`--profile` sets the same value)
 - `NO_COLOR` - Disable terminal color
 
@@ -167,6 +219,13 @@ anymoment auth login --email you@example.com --password "$ANYMOMENT_PASSWORD"
 # Send the verification email again
 anymoment auth resend-verification --json
 
+# Show whether this command is using an API key, ANYMOMENT_TOKEN, or a saved login.
+# Prints the key prefix only. Does not call the API.
+anymoment auth status
+
+# Or pass the key once. Same precedence as ANYMOMENT_API_KEY.
+anymoment calendars list --api-key "$ANYMOMENT_API_KEY"
+
 # List all tokens
 anymoment tokens list
 
@@ -211,6 +270,20 @@ anymoment calendars batch-remove-events <calendar-id> <event-id> [<event-id> ...
 
 # Get webhook URL
 anymoment calendars webhook-url <id>
+```
+
+### Calendar subscriptions
+
+Outgoing webhook subscriptions for one calendar. If you don't pass --secret, AnyMoment generates one and shows it once in the create response. Store it; later responses don't include it.
+
+```bash
+anymoment calendars subscriptions list <calendar-id>
+anymoment calendars subscriptions create <calendar-id> --url https://example.com/hooks/anymoment --event-type event.updated [--secret SECRET] [--offset-seconds N]
+anymoment calendars subscriptions get <calendar-id> <subscription-id>
+anymoment calendars subscriptions update <calendar-id> <subscription-id> [--url URL] [--event-type TYPE] [--secret SECRET] [--offset-seconds N] [--active/--inactive]
+anymoment calendars subscriptions delete <calendar-id> <subscription-id>
+anymoment calendars subscriptions deliveries <calendar-id> <subscription-id> [--limit N]
+anymoment calendars subscriptions replay <calendar-id> <subscription-id> <delivery-id>
 ```
 
 ### Events
@@ -282,6 +355,7 @@ anymoment users me
 - `--yes` - Skip the confirmation prompt. Top-level `create` and `update`, and `events delete`, ask on a terminal unless this is set.
 - `--idempotency-key KEY` - Local replay cache. The API has no idempotency header.
 - `--profile NAME` - Use `~/.anymoment/config.NAME.json`
+- `--api-key KEY` - API key for this command. Overrides a saved login and `ANYMOMENT_TOKEN`. Env: `ANYMOMENT_API_KEY`.
 - `--timezone, -z TZ` - Override timezone for this command
 - `--calendar, -c ID` - Specify calendar ID or name (or use default from config)
 
@@ -296,8 +370,14 @@ Exit codes: 0 ok, 2 usage, 3 auth, 4 not found, 5 conflict, 6 rate limited, 7 re
 ```python
 from anymoment import Client
 
-client = Client(api_url="https://api.anymoment.sineways.tech", token="optional-token")
+client = Client(
+    api_url="https://api.anymoment.sineways.tech",
+    token="optional-token",
+    api_key="optional-api-key",
+)
 ```
+
+`api_key` and `ANYMOMENT_API_KEY` win over `token` and the saved login. API keys are not written to the token file and are not refreshed.
 
 #### Authentication
 
@@ -323,7 +403,8 @@ client = Client(api_url="https://api.anymoment.sineways.tech", token="optional-t
 
 #### Events
 
-- `client.list_events(calendar_id=None, is_active=None, limit=None, offset=None, minimal=False)` - List events
+- `client.list_events(calendar_id=None, is_active=None, limit=None, offset=None, minimal=False)` - List events. With an API key and a calendar id, calls `GET /calendars/{id}/events`.
+- `client.list_calendar_events(calendar_id, is_active=None, limit=None, offset=None)` - Events on one calendar, each item `{event, link}`
 - `client.get_event(event_id)` - Get event by ID
 - `client.create_event_from_text(recurrence_text, name=None, description=None, timezone="UTC", calendar_id=None, model="high")` - Create event from natural language
 - `client.update_event(event_id, name=None, description=None)` - Update event
@@ -362,6 +443,9 @@ client = Client(api_url="https://api.anymoment.sineways.tech", token="optional-t
 - `client.list_event_feedback(...)` / `client.create_event_feedback(value, event_data, message=None)` - Event feedback
 - `client.list_guests(event_id)` / `client.add_guest(event_id, **fields)` / `client.update_guest(...)` / `client.delete_guest(...)` - Event guests
 - `client.list_webhooks(event_id)` / `client.create_webhook(...)` / `client.get_webhook(...)` / `client.update_webhook(...)` / `client.delete_webhook(...)` / `client.list_webhook_runs(...)` - Event webhooks
+- `client.list_subscriptions(calendar_id)` / `client.create_subscription(calendar_id, url, event_types, secret=None, occurrence_offset_seconds=None)` / `client.get_subscription(...)` / `client.update_subscription(...)` / `client.delete_subscription(...)` - Calendar webhook subscriptions
+- `client.list_subscription_deliveries(calendar_id, subscription_id, limit=None)` / `client.replay_subscription_delivery(...)` - Delivery log and replay
+- `verify_webhook(payload, headers, secret)` / `verify_signature(...)` / `webhook_signature(...)` - Check `X-AnyMoment-Signature` (HMAC-SHA256 over `{timestamp}.{raw body}`)
 
 #### Instances, export, and changes
 
@@ -469,9 +553,14 @@ The SDK raises specific exceptions for different error types:
 
 ```python
 from anymoment import (
+    ApiKeyExpiredError,
+    ApiKeyNotPermittedError,
+    ApiKeyRevokedError,
     AuthenticationError,
+    CalendarNotAllowedError,
     ConflictError,
     EmailNotVerifiedError,
+    InvalidApiKeyError,
     NotFoundError,
     PermissionDeniedError,
     RateLimitError,
@@ -488,6 +577,10 @@ except EmailNotVerifiedError as exc:
     print(exc.message, exc.next_step)
 except RateLimitError as exc:
     print(exc.message, exc.retry_after)
+except InvalidApiKeyError as exc:
+    print(exc.message, exc.next_step)
+except (ApiKeyRevokedError, ApiKeyExpiredError, ApiKeyNotPermittedError, CalendarNotAllowedError) as exc:
+    print(exc.code, exc.message, exc.next_step)
 except (AuthenticationError, PermissionDeniedError, ConflictError, ValidationError, UnprocessableError, ServerError) as exc:
     print(exc.message, exc.next_step)
 ```

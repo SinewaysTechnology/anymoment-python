@@ -1,5 +1,20 @@
 # Changelog
 
+## [2.1.0] - 2026-10-14
+
+### API keys
+
+- `Client(api_key=...)` and `ANYMOMENT_API_KEY` send `Authorization: Bearer`. When a key is set, it is used instead of a saved login or `ANYMOMENT_TOKEN`.
+- The CLI accepts `--api-key`. `am auth status` shows the method in use (API key, environment token, or saved login) and the key prefix. It does not print the secret and it does not call the API.
+- Keys are created in AnyMoment settings. This release does not create, rotate, or revoke keys.
+- Typed errors: `InvalidApiKeyError` (`invalid_api_key`), `ApiKeyRevokedError` (`api_key_revoked`), `ApiKeyExpiredError` (`api_key_expired`), `ApiKeyNotPermittedError` (`api_key_not_permitted`), and `CalendarNotAllowedError` (`calendar_not_allowed`). Each one includes a next step. HTTP 429 still raises `RateLimitError` with `retry_after` taken from `retry_after_seconds`.
+- A calendar-limited key cannot call `GET /events`. Pass a calendar id. `list_events` then calls `GET /calendars/{calendar_id}/events`.
+
+### Webhook subscriptions
+
+- Create, read, update, delete, list deliveries, and replay a delivery at `/calendars/{calendar_id}/subscriptions`.
+- `verify_webhook` checks `X-AnyMoment-Signature`. The value is hex HMAC-SHA256 over `{timestamp}.{raw body}`. `X-AnyMoment-Timestamp` is the timestamp. `X-AnyMoment-Delivery` identifies the attempt.
+
 ## [2.0.1] - 2026-10-14
 
 ### Fixed
@@ -62,6 +77,7 @@ CLI updates for the API at that time, and a stable 1.0 release. Requires Python 
 
 First published SDK and CLI, with calendar and event commands, batch linking and sharing, and the PyPI publish workflow.
 
+[2.1.0]: https://github.com/SinewaysTechnology/anymoment-python/compare/v2.0.1...v2.1.0
 [2.0.1]: https://github.com/SinewaysTechnology/anymoment-python/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/SinewaysTechnology/anymoment-python/compare/v1.0.0...v2.0.0
 [1.0.0]: https://github.com/SinewaysTechnology/anymoment-python/compare/v0.1.0...v1.0.0

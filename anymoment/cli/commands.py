@@ -24,8 +24,9 @@ from anymoment.cli.state import (
     fail,
     idempotency_key,
     machine,
+    state,
 )
-from anymoment.client import Client
+from anymoment.client import Client, api_key_prefix
 from anymoment.config import (
     get_api_url,
     get_config,
@@ -43,22 +44,87 @@ from anymoment.token_manager import (
 )
 
 
-def get_client(host=None, require_auth=True):
-    """Get a configured client instance."""
-    api_url = host or get_api_url()
-    token = os.environ.get("ANYMOMENT_TOKEN") or get_token(api_url)
-    client = Client(api_url=api_url, token=token)
+def _flag_api_key() -> Optional[str]:
+    value = state().get("api_key")
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
 
-    if require_auth and not token:
+
+def _env_api_key() -> Optional[str]:
+    value = os.environ.get("ANYMOMENT_API_KEY")
+    if value is None:
+        return None
+    text = value.strip()
+    return text or None
+
+
+def resolve_api_key() -> Optional[str]:
+    """CLI flag, then ANYMOMENT_API_KEY. The secret is not logged."""
+    return _flag_api_key() or _env_api_key()
+
+
+def get_client(host=None, require_auth=True):
+    """Get a configured client instance.
+
+    An API key from ``--api-key`` or ``ANYMOMENT_API_KEY`` is used instead of
+    a saved login or ``ANYMOMENT_TOKEN``.
+    """
+    api_url = host or get_api_url()
+    api_key = resolve_api_key()
+    token = None if api_key else (os.environ.get("ANYMOMENT_TOKEN") or get_token(api_url))
+    client = Client(api_url=api_url, token=token, api_key=api_key)
+
+    if require_auth and not api_key and not token:
         fail(
             AuthenticationError(
-                "Not authenticated. Run 'anymoment auth login' or set ANYMOMENT_TOKEN.",
+                "Not authenticated. Run 'anymoment auth login', set ANYMOMENT_TOKEN, or set ANYMOMENT_API_KEY.",
                 user_message="Not authenticated.",
-                next_step="Run 'anymoment auth login' or set ANYMOMENT_TOKEN.",
+                next_step="Run 'anymoment auth login', set ANYMOMENT_TOKEN, or set ANYMOMENT_API_KEY.",
             )
         )
 
     return client
+
+
+def auth_status_payload(host: Optional[str] = None) -> dict[str, Any]:
+    """Which credential this command would use. Never includes a secret."""
+    api_url = host or get_api_url()
+    flag_key = _flag_api_key()
+    env_key = _env_api_key()
+    if flag_key or env_key:
+        key = flag_key or env_key or ""
+        return {
+            "authenticated": True,
+            "host": api_url,
+            "key_prefix": api_key_prefix(key),
+            "method": "api_key",
+            "source": "flag" if flag_key else "env",
+        }
+    if os.environ.get("ANYMOMENT_TOKEN"):
+        return {
+            "authenticated": True,
+            "host": api_url,
+            "method": "token",
+            "source": "env",
+        }
+    saved = list_tokens().get(api_url)
+    if saved:
+        usable = not saved.get("expired") and not saved.get("invalid")
+        return {
+            "authenticated": usable,
+            "expired": bool(saved.get("expired")),
+            "expires_at": saved.get("expires_at"),
+            "host": api_url,
+            "method": "saved_login",
+            "source": "file",
+        }
+    return {
+        "authenticated": False,
+        "host": api_url,
+        "method": "none",
+    }
 
 
 def resolve_calendar_id(client, calendar_ref: Optional[str]):
@@ -341,6 +407,44 @@ def logout(host):
     api_url = host or get_api_url()
     delete_token(api_url)
     click.echo(f"[OK] Logged out from {api_url}")
+
+
+@auth.command()
+@click.option("--host", "-h", default=None, help="API host URL")
+def status(host):
+    """Show which credential is in use. Does not print secrets or call the API."""
+    payload = auth_status_payload(host)
+    if machine():
+        emit(payload)
+        return
+    method = payload["method"]
+    labels = {
+        "api_key": "API key",
+        "token": "ANYMOMENT_TOKEN",
+        "saved_login": "saved login",
+        "none": "not authenticated",
+    }
+    click.echo(f"Host: {payload['host']}")
+    click.echo(f"Method: {labels.get(method, method)}")
+    if method == "api_key":
+        prefix = payload.get("key_prefix")
+        if prefix:
+            click.echo(f"Key prefix: {prefix}")
+        else:
+            click.echo("Key prefix: unrecognized (the secret is not shown)")
+        click.echo(f"Source: {'--api-key' if payload.get('source') == 'flag' else 'ANYMOMENT_API_KEY'}")
+    elif method == "saved_login":
+        if payload.get("expired"):
+            click.echo("Status: expired")
+        elif payload.get("authenticated"):
+            click.echo("Status: saved")
+        else:
+            click.echo("Status: not usable")
+        if payload.get("expires_at"):
+            click.echo(f"Expires: {payload['expires_at']}")
+        click.echo("Run 'anymoment auth login' to replace it, or set ANYMOMENT_API_KEY.")
+    elif method == "none":
+        click.echo("Run 'anymoment auth login', set ANYMOMENT_TOKEN, or set ANYMOMENT_API_KEY.")
 
 
 @cli.group()
@@ -671,6 +775,203 @@ def webhook_url(calendar_id, host, raw):
         format_output(result, raw=raw)
     except Exception as e:
         handle_api_error(e, "Get webhook URL")
+
+
+@calendars.group()
+def subscriptions():
+    """Outgoing webhook subscriptions for one calendar."""
+    pass
+
+
+def _subscription_target(calendar_id: str, subscription_id: Optional[str] = None) -> str:
+    if subscription_id:
+        return f"{calendar_id} {subscription_id}"
+    return calendar_id
+
+
+@subscriptions.command("list")
+@click.argument("calendar_id")
+@click.option("--host", "-h", help="API host URL")
+@click.option("--raw", is_flag=True, help="Output full JSON")
+def list_subscriptions(calendar_id, host, raw):
+    """List subscriptions on a calendar. Secrets are not included."""
+    try:
+        client = get_client(host)
+        calendar_id = resolve_calendar_id(client, calendar_id)
+        rows = client.list_subscriptions(calendar_id)
+        if machine() or raw:
+            format_output(rows, raw=raw)
+            return
+        if not rows:
+            click.echo("No subscriptions.")
+            return
+        click.echo(f"Found {len(rows)} subscription(s):\n")
+        for row in rows:
+            active = "active" if row.get("is_active") else "inactive"
+            types = ", ".join(row.get("event_types") or [])
+            click.echo(f"  {row.get('url')} [{active}]")
+            click.echo(f"    {row.get('id')}  {types}")
+    except Exception as e:
+        handle_api_error(e, "List subscriptions")
+
+
+@subscriptions.command("create")
+@click.argument("calendar_id")
+@click.option("--url", required=True, help="HTTPS endpoint that receives deliveries")
+@click.option("--event-type", "event_types", multiple=True, required=True, help="Change type to deliver. Repeat for more than one.")
+@click.option("--secret", default=None, help="Signing secret. Omit to let AnyMoment generate one.")
+@click.option("--offset-seconds", type=int, default=None, help="Seconds before (negative) or after an occurrence")
+@click.option("--host", "-h", help="API host URL")
+@click.option("--raw", is_flag=True, help="Output full JSON")
+def create_subscription(calendar_id, url, event_types, secret, offset_seconds, host, raw):
+    """Create a subscription. A generated secret is shown once."""
+    try:
+        if _replay_or_dry_run("create-subscription", url):
+            return
+        client = get_client(host)
+        calendar_id = resolve_calendar_id(client, calendar_id)
+        result = client.create_subscription(
+            calendar_id,
+            url=url,
+            event_types=list(event_types),
+            secret=secret,
+            occurrence_offset_seconds=offset_seconds,
+        )
+        if not machine() and not raw:
+            if secret:
+                click.echo("[OK] Subscription created. Your signing secret was stored and is not shown again.\n")
+            else:
+                click.echo("[OK] Subscription created. The generated signing secret is below. Store it now. It is not shown again.\n")
+        format_output(result, raw=raw)
+    except Exception as e:
+        handle_api_error(e, "Create subscription")
+
+
+@subscriptions.command("get")
+@click.argument("calendar_id")
+@click.argument("subscription_id")
+@click.option("--host", "-h", help="API host URL")
+@click.option("--raw", is_flag=True, help="Output full JSON")
+def get_subscription(calendar_id, subscription_id, host, raw):
+    """Get one subscription."""
+    try:
+        client = get_client(host)
+        calendar_id = resolve_calendar_id(client, calendar_id)
+        result = client.get_subscription(calendar_id, subscription_id)
+        format_output(result, raw=raw)
+    except Exception as e:
+        handle_api_error(e, "Get subscription")
+
+
+@subscriptions.command("update")
+@click.argument("calendar_id")
+@click.argument("subscription_id")
+@click.option("--url", default=None, help="New endpoint URL")
+@click.option("--event-type", "event_types", multiple=True, help="Replace change types. Repeat for more than one.")
+@click.option("--secret", default=None, help="Replacement signing secret. It is not shown again.")
+@click.option("--offset-seconds", type=int, default=None, help="Seconds before (negative) or after an occurrence")
+@click.option("--active/--inactive", default=None, help="Turn delivery on or off")
+@click.option("--host", "-h", help="API host URL")
+@click.option("--raw", is_flag=True, help="Output full JSON")
+def update_subscription(calendar_id, subscription_id, url, event_types, secret, offset_seconds, active, host, raw):
+    """Update a subscription."""
+    if not any([url, event_types, secret, offset_seconds is not None, active is not None]):
+        click.echo(
+            "[ERROR] Provide at least one of: --url, --event-type, --secret, --offset-seconds, --active/--inactive",
+            err=True,
+        )
+        sys.exit(EXIT_USAGE)
+    try:
+        if _replay_or_dry_run("update-subscription", _subscription_target(calendar_id, subscription_id)):
+            return
+        client = get_client(host)
+        calendar_id = resolve_calendar_id(client, calendar_id)
+        result = client.update_subscription(
+            calendar_id,
+            subscription_id,
+            url=url,
+            secret=secret,
+            event_types=list(event_types) or None,
+            occurrence_offset_seconds=offset_seconds,
+            is_active=active,
+        )
+        if not machine() and not raw:
+            click.echo("[OK] Subscription updated.\n")
+        format_output(result, raw=raw)
+    except Exception as e:
+        handle_api_error(e, "Update subscription")
+
+
+@subscriptions.command("delete")
+@click.argument("calendar_id")
+@click.argument("subscription_id")
+@click.option("--host", "-h", help="API host URL")
+def delete_subscription(calendar_id, subscription_id, host):
+    """Delete a subscription. On a terminal, asks first unless --yes is set."""
+    try:
+        if sys.stdin.isatty() and not confirmed() and not dry_run():
+            click.confirm(f"Delete subscription {subscription_id}?", abort=True)
+        if _replay_or_dry_run("delete-subscription", _subscription_target(calendar_id, subscription_id)):
+            return
+        client = get_client(host)
+        calendar_id = resolve_calendar_id(client, calendar_id)
+        client.delete_subscription(calendar_id, subscription_id)
+        if machine():
+            emit({"deleted": True, "id": subscription_id, "calendar_id": calendar_id})
+        else:
+            click.echo("[OK] Subscription deleted")
+    except click.Abort:
+        sys.exit(EXIT_USAGE)
+    except Exception as e:
+        handle_api_error(e, "Delete subscription")
+
+
+@subscriptions.command("deliveries")
+@click.argument("calendar_id")
+@click.argument("subscription_id")
+@click.option("--limit", "-l", type=int, help="Maximum rows (1-200)")
+@click.option("--host", "-h", help="API host URL")
+@click.option("--raw", is_flag=True, help="Output full JSON")
+def subscription_deliveries(calendar_id, subscription_id, limit, host, raw):
+    """Show the delivery log, newest first."""
+    try:
+        client = get_client(host)
+        calendar_id = resolve_calendar_id(client, calendar_id)
+        rows = client.list_subscription_deliveries(calendar_id, subscription_id, limit=limit)
+        if machine() or raw:
+            format_output(rows, raw=raw)
+            return
+        if not rows:
+            click.echo("No deliveries.")
+            return
+        click.echo(f"Found {len(rows)} delivery(ies):\n")
+        for row in rows:
+            when = row.get("created_at") or ""
+            click.echo(f"  {row.get('status')}  {row.get('change_type')}  {when}")
+            click.echo(f"    {row.get('id')}")
+    except Exception as e:
+        handle_api_error(e, "List deliveries")
+
+
+@subscriptions.command("replay")
+@click.argument("calendar_id")
+@click.argument("subscription_id")
+@click.argument("delivery_id")
+@click.option("--host", "-h", help="API host URL")
+@click.option("--raw", is_flag=True, help="Output full JSON")
+def replay_delivery(calendar_id, subscription_id, delivery_id, host, raw):
+    """Queue the same payload again. The original delivery is unchanged."""
+    try:
+        if _replay_or_dry_run("replay-delivery", delivery_id):
+            return
+        client = get_client(host)
+        calendar_id = resolve_calendar_id(client, calendar_id)
+        result = client.replay_subscription_delivery(calendar_id, subscription_id, delivery_id)
+        if not machine() and not raw:
+            click.echo("[OK] Replay queued.\n")
+        format_output(result, raw=raw)
+    except Exception as e:
+        handle_api_error(e, "Replay delivery")
 
 
 @calendars.command("add-event")
@@ -1007,7 +1308,7 @@ def create(
 @click.option("--raw", is_flag=True, help="Output full JSON")
 @click.option("--pipe", is_flag=True, help="Output only IDs")
 def list(calendar, active, limit, offset, minimal, host, raw, pipe):
-    """List events."""
+    """List events. An API key limited to calendars needs --calendar."""
     try:
         client = get_client(host)
         cal_id = resolve_calendar_id(client, calendar)
@@ -1245,6 +1546,7 @@ def _schema_document():
             "--dry-run",
             "--idempotency-key",
             "--profile",
+            "--api-key",
         ],
     }
 
