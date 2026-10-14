@@ -1,5 +1,6 @@
 """API client for AnyMoment SDK."""
 
+import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Union
 
@@ -9,9 +10,14 @@ from anymoment.config import get_api_url
 from anymoment.exceptions import (
     AnyMomentException,
     AuthenticationError,
+    CALENDAR_LIMITED_EVENTS_NEXT_STEP,
+    PermissionDeniedError,
+    ValidationError,
     exception_for_status,
     parse_error_payload,
 )
+
+_API_KEY_FAILURES = {"invalid_api_key", "api_key_revoked", "api_key_expired", "auth_failed"}
 from anymoment.caldav import CalDavClient
 from anymoment.endpoints import EndpointsMixin
 from anymoment.google import GoogleAPI
@@ -24,18 +30,35 @@ class Client(EndpointsMixin):
     
     DEFAULT_API_URL = "https://api.anymoment.sineways.tech"
     
-    def __init__(self, api_url: Optional[str] = None, token: Optional[str] = None):
+    def __init__(
+        self,
+        api_url: Optional[str] = None,
+        token: Optional[str] = None,
+        api_key: Optional[str] = None,
+    ):
         """
         Initialize the API client.
-        
+
+        An API key is sent as ``Authorization: Bearer``. When ``api_key`` or
+        ``ANYMOMENT_API_KEY`` is set, it is used instead of a saved login.
+
         Args:
             api_url: API base URL. Defaults to config/env or https://api.anymoment.sineways.tech
             token: Optional JWT token. If not provided, will try to load from token manager.
+            api_key: Optional API key (``am_live_<8 hex>_<secret>``). Falls back to ANYMOMENT_API_KEY.
         """
         self.api_url = api_url or get_api_url() or self.DEFAULT_API_URL
         self.api_url = self.api_url.rstrip("/")
         self._token = token
+        self._api_key = _clean_secret(api_key)
+        if self._api_key is None:
+            self._api_key = _clean_secret(os.getenv("ANYMOMENT_API_KEY"))
         self._session = requests.Session()
+
+    @property
+    def api_key(self) -> Optional[str]:
+        """The API key in use, or None when the client is using a session token."""
+        return self._api_key
 
     @property
     def google(self) -> GoogleAPI:
@@ -61,6 +84,9 @@ class Client(EndpointsMixin):
     def _get_headers(self) -> Dict[str, str]:
         """Get request headers with authentication."""
         headers = {"Content-Type": "application/json"}
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
+            return headers
         token = self._get_token()
         if token:
             headers["x-auth-token"] = token
@@ -87,11 +113,15 @@ class Client(EndpointsMixin):
         CalDAV auth_failed, any /caldav 401, and token login/extend 401s
         are credential failures. Refreshing the session token cannot fix them.
         """
+        if self._api_key:
+            return False
         normalized = path.split("?", 1)[0]
         if normalized.startswith("/caldav") or normalized.startswith("/auth/token"):
             return False
         parsed = self._parsed_error(response)
-        return parsed.code != "auth_failed"
+        if parsed.code in _API_KEY_FAILURES:
+            return False
+        return True
 
     def _handle_response(self, response: requests.Response) -> Any:
         """Handle API response and raise appropriate exceptions."""
@@ -183,6 +213,14 @@ class Client(EndpointsMixin):
         Returns:
             New JWT token string
         """
+        if self._api_key:
+            raise AuthenticationError(
+                "API keys cannot be refreshed.",
+                user_message="API keys cannot be refreshed.",
+                next_step=(
+                    "Create a new key in AnyMoment settings if this one was revoked or expired."
+                ),
+            )
         token = self._get_token()
         if not token:
             raise AuthenticationError("No token available to refresh")
@@ -389,6 +427,28 @@ class Client(EndpointsMixin):
     
     # Event methods
     
+    def list_calendar_events(
+        self,
+        calendar_id: str,
+        is_active: Optional[bool] = None,
+        limit: Optional[int] = None,
+        offset: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """List events on one calendar.
+
+        ``GET /calendars/{calendar_id}/events``. Each item is ``{"event", "link"}``.
+        ``is_active`` filters that page. The route has no minimal flag.
+        """
+        params: Dict[str, Any] = {}
+        if limit is not None:
+            params["limit"] = limit
+        if offset is not None:
+            params["offset"] = offset
+        events = self._request("GET", f"/calendars/{calendar_id}/events", params=params or None)
+        if is_active is None or not isinstance(events, list):
+            return events
+        return [item for item in events if _event_is_active(item) is is_active]
+
     def list_events(
         self,
         calendar_id: Optional[str] = None,
@@ -397,8 +457,29 @@ class Client(EndpointsMixin):
         offset: Optional[int] = None,
         minimal: bool = False,
     ) -> List[Dict[str, Any]]:
-        """List all events for the authenticated user."""
-        params = {}
+        """List events for the authenticated user.
+
+        A session token uses ``GET /events``. An API key with ``calendar_id``
+        uses ``GET /calendars/{calendar_id}/events``, which is required for a
+        calendar-limited key. ``GET /events`` is not available to those keys.
+        """
+        if self._api_key and calendar_id:
+            if minimal:
+                raise ValidationError(
+                    "minimal is only supported on GET /events.",
+                    user_message="This key lists events on one calendar at a time.",
+                    next_step=(
+                        "Omit minimal and pass calendar_id. "
+                        "The client calls GET /calendars/{calendar_id}/events."
+                    ),
+                )
+            return self.list_calendar_events(
+                calendar_id,
+                is_active=is_active,
+                limit=limit,
+                offset=offset,
+            )
+        params: Dict[str, Any] = {}
         if calendar_id is not None:
             params["calendar_id"] = calendar_id
         if is_active is not None:
@@ -409,7 +490,12 @@ class Client(EndpointsMixin):
             params["offset"] = offset
         if minimal:
             params["minimal"] = True
-        return self._request("GET", "/events", params=params)
+        try:
+            return self._request("GET", "/events", params=params or None)
+        except PermissionDeniedError as exc:
+            if self._api_key and not calendar_id and exc.code != "api_key_not_permitted":
+                exc.next_step = CALENDAR_LIMITED_EVENTS_NEXT_STEP
+            raise
     
     def get_event(self, event_id: str) -> Dict[str, Any]:
         """Get a specific event by ID."""
@@ -586,3 +672,37 @@ class Client(EndpointsMixin):
         return mutation_result(
             self._request("DELETE", f"/calendars/{calendar_id}/events/{event_id}")
         )
+
+
+def _clean_secret(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    text = value.strip()
+    return text or None
+
+
+def api_key_prefix(api_key: str) -> Optional[str]:
+    """Public prefix ``am_live_<8 hex>``. The secret after the underscore is dropped."""
+    text = api_key.strip()
+    parts = text.split("_", 3)
+    if len(parts) != 4:
+        return None
+    kind, mode, prefix, secret = parts
+    if kind != "am" or mode != "live" or len(prefix) != 8 or not secret:
+        return None
+    if any(char not in "0123456789abcdefABCDEF" for char in prefix):
+        return None
+    return f"am_live_{prefix}"
+
+
+def _event_is_active(item: Any) -> Optional[bool]:
+    if not isinstance(item, dict):
+        return None
+    event = item.get("event")
+    if isinstance(event, dict) and "is_active" in event:
+        value = event.get("is_active")
+    else:
+        value = item.get("is_active")
+    if isinstance(value, bool):
+        return value
+    return None

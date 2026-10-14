@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "anymoment"
-version = "2.0.1"
+version = "2.1.0"
 description = "Python SDK and CLI for AnyMoment API - Create and manage your schedule with natural language, write moments the way you think them."
 readme = "README.md"
 requires-python = ">=3.10"

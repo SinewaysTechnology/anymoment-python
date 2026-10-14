@@ -6,7 +6,7 @@ PACKAGE = Path(__file__).resolve().parents[1] / "anymoment"
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 LIVE = Path(__file__).resolve().parent / "test_live_smoke.py"
 
-FORBIDDEN_SNIPPETS = ("/admin", "/auth/admin", "/google/admin")
+FORBIDDEN_SNIPPETS = ("/admin", "/auth/admin", "/google/admin", "/api-keys")
 
 
 def test_package_source_has_no_admin_routes():
