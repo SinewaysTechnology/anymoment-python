@@ -9,7 +9,7 @@ import pytest
 import responses
 
 from anymoment.client import Client
-from anymoment.exceptions import AuthenticationError
+from anymoment.exceptions import AuthenticationError, ConflictError, RateLimitError
 
 from tests.support import (
     API,
@@ -100,7 +100,6 @@ def test_get_agenda_exposes_events_and_failures(client):
     assert field(failures[0], "is_google_synced") is True
 
 
-@pending("top-level user_message and next_step are parsed, not stringified")
 def test_top_level_user_message_and_next_step(client):
     body = load_fixture("resend_502.json")
     with responses.RequestsMock(assert_all_requests_are_fired=False) as rsps:
@@ -114,7 +113,6 @@ def test_top_level_user_message_and_next_step(client):
     assert err.message == body["user_message"]
 
 
-@pending("CalDAV detail {code, message, next_step} maps onto code, user_message, and next_step")
 def test_caldav_error_fields(client):
     body = load_fixture("error_caldav.json")
     detail = body["detail"]
@@ -135,7 +133,6 @@ def test_caldav_error_fields(client):
     assert err.next_step == detail["next_step"]
 
 
-@pending("a CalDAV auth_failed 401 does not refresh the AnyMoment token")
 def test_caldav_auth_failed_does_not_refresh(client):
     body = load_fixture("error_caldav.json")
     with responses.RequestsMock(assert_all_requests_are_fired=False) as rsps:
@@ -151,7 +148,6 @@ def test_caldav_auth_failed_does_not_refresh(client):
         assert _calls(rsps, "/auth/token/extend") == []
 
 
-@pending("422 validation errors raise UnprocessableError and keep the detail list")
 def test_recorded_422_is_unprocessable(client):
     body = load_fixture("recorded_agenda_422.json")
     unprocessable = exception_type("UnprocessableError")
@@ -164,7 +160,6 @@ def test_recorded_422_is_unprocessable(client):
     assert err.details == body or field(err, "raw") == body or err.details.get("detail") == body["detail"]
 
 
-@pending("403 raises PermissionDeniedError with user_message")
 def test_forbidden_is_permission_denied(client):
     body = load_fixture("error_forbidden.json")
     denied = exception_type("PermissionDeniedError")
@@ -177,7 +172,6 @@ def test_forbidden_is_permission_denied(client):
     assert err.user_message == body["detail"]
 
 
-@pending("plain-text unverified login raises EmailNotVerifiedError")
 def test_unverified_login_is_its_own_error(mock_token_file):
     client = Client(api_url=API)
     not_verified = exception_type("EmailNotVerifiedError")
@@ -307,7 +301,6 @@ def test_link_event_exposes_export_warnings(client):
     assert field(link, "event_id") == EVENT_ID
 
 
-@pending("any 2xx response is success, including 202")
 def test_accepted_status_is_success(client):
     body = {"id": EVENT_ID, "name": "Team standup"}
     with responses.RequestsMock(assert_all_requests_are_fired=False) as rsps:
@@ -319,3 +312,40 @@ def test_accepted_status_is_success(client):
         )
         result = client.create_event_from_text("Tomorrow at 9")
     assert field(result, "id") == EVENT_ID
+
+
+def test_conflict_error_reads_caldav_style_detail(client):
+    body = {
+        "detail": {
+            "code": "calendar_already_linked",
+            "message": "This calendar is already linked.",
+            "next_step": "Use the existing link.",
+        }
+    }
+    with responses.RequestsMock(assert_all_requests_are_fired=False) as rsps:
+        rsps.add(
+            responses.POST,
+            f"{API}/calendars/{CALENDAR_ID}/events/{EVENT_ID}",
+            json=body,
+            status=409,
+        )
+        with pytest.raises(ConflictError) as exc_info:
+            client.link_event_to_calendar(CALENDAR_ID, EVENT_ID)
+    err = exc_info.value
+    assert err.status_code == 409
+    assert err.code == "calendar_already_linked"
+    assert err.user_message == "This calendar is already linked."
+    assert err.next_step == "Use the existing link."
+    assert err.message == err.user_message
+
+
+def test_rate_limit_reads_retry_after_seconds(client):
+    body = {"retry_after_seconds": 30, "user_message": "Slow down."}
+    with responses.RequestsMock(assert_all_requests_are_fired=False) as rsps:
+        rsps.add(responses.GET, f"{API}/calendars", json=body, status=429)
+        with pytest.raises(RateLimitError) as exc_info:
+            client.list_calendars()
+    err = exc_info.value
+    assert err.status_code == 429
+    assert err.retry_after == 30
+    assert err.user_message == "Slow down."

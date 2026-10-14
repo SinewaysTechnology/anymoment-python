@@ -9,9 +9,8 @@ from anymoment.config import get_api_url
 from anymoment.exceptions import (
     AnyMomentException,
     AuthenticationError,
-    NotFoundError,
-    ServerError,
-    ValidationError,
+    exception_for_status,
+    parse_error_payload,
 )
 from anymoment.token_manager import get_token, save_token
 
@@ -53,39 +52,42 @@ class Client:
             headers["x-auth-token"] = token
         return headers
     
+    def _read_payload(self, response: requests.Response) -> Any:
+        """Return parsed JSON, or None when the body is not JSON."""
+        try:
+            return response.json()
+        except ValueError:
+            return None
+
+    def _parsed_error(self, response: requests.Response):
+        return parse_error_payload(
+            self._read_payload(response),
+            response.text or "",
+            response.status_code,
+            response.headers,
+        )
+
+    def _should_refresh(self, path: str, response: requests.Response) -> bool:
+        """Refresh only a real AnyMoment session 401.
+
+        CalDAV auth_failed, any /caldav 401, and token login/extend 401s
+        are credential failures. Refreshing the session token cannot fix them.
+        """
+        normalized = path.split("?", 1)[0]
+        if normalized.startswith("/caldav") or normalized.startswith("/auth/token"):
+            return False
+        parsed = self._parsed_error(response)
+        return parsed.code != "auth_failed"
+
     def _handle_response(self, response: requests.Response) -> Any:
         """Handle API response and raise appropriate exceptions."""
-        if response.status_code == 200 or response.status_code == 201:
-            # Try to parse JSON, return text if not JSON
+        if 200 <= response.status_code < 300:
             try:
                 return response.json()
             except ValueError:
                 return response.text
-        
-        # Handle errors
-        error_detail = "Unknown error"
-        try:
-            error_data = response.json()
-            if isinstance(error_data, dict):
-                error_detail = error_data.get("detail", str(error_data))
-            else:
-                error_detail = str(error_data)
-        except ValueError:
-            error_detail = response.text or f"HTTP {response.status_code}"
-        
-        if response.status_code == 401:
-            raise AuthenticationError(error_detail)
-        elif response.status_code == 404:
-            raise NotFoundError(error_detail)
-        elif response.status_code == 400:
-            raise ValidationError(error_detail)
-        elif response.status_code >= 500:
-            raise ServerError(error_detail, status_code=response.status_code)
-        else:
-            raise AnyMomentException(
-                error_detail,
-                status_code=response.status_code,
-            )
+
+        raise exception_for_status(response.status_code, self._parsed_error(response))
     
     def _request(
         self,
@@ -109,12 +111,13 @@ class Client:
                 timeout=30,
             )
             
-            # Handle 401 with token refresh
-            if response.status_code == 401 and retry_on_auth_error:
-                # Try to refresh token
+            if (
+                response.status_code == 401
+                and retry_on_auth_error
+                and self._should_refresh(path, response)
+            ):
                 try:
                     self.refresh_token()
-                    # Retry once with new token
                     headers = self._get_headers()
                     response = self._session.request(
                         method=method,
@@ -125,11 +128,10 @@ class Client:
                         timeout=30,
                     )
                 except Exception:
-                    # Refresh failed, raise auth error
                     pass
-            
+
             return self._handle_response(response)
-        except (AuthenticationError, NotFoundError, ValidationError, ServerError, AnyMomentException):
+        except AnyMomentException:
             raise
         except requests.exceptions.RequestException as e:
             raise AnyMomentException(f"Request failed: {e}")
