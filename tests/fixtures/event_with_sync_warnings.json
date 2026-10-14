@@ -1,0 +1,26 @@
+{
+  "id": "660e8400-e29b-41d4-a716-446655440001",
+  "name": "Team standup",
+  "description": "Daily sync",
+  "is_active": true,
+  "created_at": "2026-10-01T08:00:00Z",
+  "updated_at": "2026-10-14T08:00:00Z",
+  "components": [],
+  "webhooks": [],
+  "display_name": "Team standup",
+  "calendar_ids": ["550e8400-e29b-41d4-a716-446655440000"],
+  "google_origin": false,
+  "google_event_url": null,
+  "external_origin": null,
+  "conference_data": null,
+  "guests": [],
+  "sync_warnings": [
+    {
+      "reason": "trial_paused",
+      "event_name": "Team standup",
+      "calendar_name": "Work",
+      "user_message": "Saved Team standup on Work, but it was not sent to the calendar server.",
+      "next_step": "Upgrade"
+    }
+  ]
+}

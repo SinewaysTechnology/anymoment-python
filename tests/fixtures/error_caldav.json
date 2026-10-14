@@ -1,0 +1,10 @@
+{
+  "detail": {
+    "code": "auth_failed",
+    "message": "The calendar server rejected the password for Family.",
+    "next_step": "Create a new app-specific password and reconnect Family.",
+    "host": "caldav.example.com",
+    "calendar_name": "Family",
+    "status": 401
+  }
+}

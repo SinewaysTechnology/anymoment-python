@@ -4,7 +4,6 @@ from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
-import requests
 
 from anymoment.client import Client
 from anymoment.exceptions import (

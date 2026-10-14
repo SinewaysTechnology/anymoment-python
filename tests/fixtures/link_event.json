@@ -1,0 +1,17 @@
+{
+  "link": {
+    "id": "770e8400-e29b-41d4-a716-446655440010",
+    "calendar_id": "550e8400-e29b-41d4-a716-446655440000",
+    "event_id": "660e8400-e29b-41d4-a716-446655440001",
+    "display_order": 0,
+    "color_override": null,
+    "added_at": "2026-10-14T08:05:00Z"
+  },
+  "google_export_warnings": [
+    {
+      "reason": "account_needs_reauth",
+      "account_email": "user@gmail.com",
+      "user_message": "Reconnect the Google account user@gmail.com to sync this event."
+    }
+  ]
+}

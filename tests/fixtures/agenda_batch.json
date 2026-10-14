@@ -1,0 +1,82 @@
+{
+  "events": [
+    {
+      "event": {
+        "id": "660e8400-e29b-41d4-a716-446655440001",
+        "name": "Team standup",
+        "description": "Daily sync",
+        "is_active": true,
+        "created_at": "2026-10-01T08:00:00Z",
+        "updated_at": "2026-10-14T08:00:00Z",
+        "components": [],
+        "webhooks": [],
+        "display_name": "Team standup",
+        "calendar_ids": ["550e8400-e29b-41d4-a716-446655440000"],
+        "google_origin": false,
+        "google_event_url": null,
+        "external_origin": null,
+        "conference_data": null,
+        "guests": [],
+        "sync_warnings": [
+          {
+            "reason": "trial_paused",
+            "event_name": "Team standup",
+            "calendar_name": "Work",
+            "user_message": "Saved Team standup on Work, but it was not sent to the calendar server.",
+            "next_step": "Upgrade"
+          }
+        ]
+      },
+      "instances": [
+        {
+          "start": "2026-10-14T09:00:00Z",
+          "end": "2026-10-14T09:15:00Z",
+          "is_all_day": false
+        }
+      ]
+    },
+    {
+      "event": {
+        "id": "660e8400-e29b-41d4-a716-446655440002",
+        "name": "Family dinner",
+        "description": null,
+        "is_active": true,
+        "created_at": "2026-10-02T08:00:00Z",
+        "updated_at": "2026-10-14T08:00:00Z",
+        "components": [],
+        "webhooks": [],
+        "display_name": "Family dinner",
+        "calendar_ids": ["550e8400-e29b-41d4-a716-446655440000"],
+        "google_origin": false,
+        "google_event_url": null,
+        "external_origin": {
+          "provider": "caldav",
+          "provider_label": "iCloud",
+          "account": "family@icloud.com",
+          "calendar_name": "Family",
+          "read_only": true,
+          "href": "/calendars/family/dinner.ics"
+        },
+        "conference_data": null,
+        "guests": [],
+        "sync_warnings": []
+      },
+      "instances": [
+        {
+          "start": "2026-10-14T18:00:00Z",
+          "end": "2026-10-14T19:00:00Z",
+          "is_all_day": false
+        }
+      ]
+    }
+  ],
+  "failures": [
+    {
+      "event_id": "660e8400-e29b-41d4-a716-446655440099",
+      "event_name": "Imported dentist",
+      "message": "Could not expand this event.",
+      "reason": "instance_expansion_failed",
+      "is_google_synced": true
+    }
+  ]
+}

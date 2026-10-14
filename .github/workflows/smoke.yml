@@ -1,0 +1,44 @@
+name: Live smoke
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: Read-only agenda and me
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Install package and dev tools
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[cli]" -r requirements-dev.txt
+
+      - name: Live smoke
+        env:
+          ANYMOMENT_BASE_URL: ${{ secrets.ANYMOMENT_BASE_URL }}
+          ANYMOMENT_TEST_TOKEN: ${{ secrets.ANYMOMENT_TEST_TOKEN }}
+        run: |
+          if [ -z "$ANYMOMENT_BASE_URL" ] || [ -z "$ANYMOMENT_TEST_TOKEN" ]; then
+            echo "ANYMOMENT_BASE_URL or ANYMOMENT_TEST_TOKEN is not set. Skipping live smoke."
+            exit 0
+          fi
+          pytest -m live --override-ini="addopts=" --strict-markers -ra
