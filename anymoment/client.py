@@ -12,6 +12,7 @@ from anymoment.exceptions import (
     exception_for_status,
     parse_error_payload,
 )
+from anymoment.models import AgendaResult, agenda_result, mutation_result
 from anymoment.token_manager import get_token, save_token
 
 
@@ -212,7 +213,7 @@ class Client:
         calendar_ids: Optional[List[str]] = None,
         use_cache: bool = True,
         include_webhooks: bool = False,
-    ) -> List[Dict[str, Any]]:
+    ) -> AgendaResult:
         """
         Get events and their instances within a time window (agenda).
 
@@ -224,7 +225,8 @@ class Client:
             include_webhooks: Include webhooks in each event payload (default False).
 
         Returns:
-            List of dicts with keys 'event' and 'instances'.
+            AgendaResult with .events and .failures. A legacy list body is
+            exposed as events with an empty failures list.
         """
         params = {
             "start": self._datetime_to_iso(start),
@@ -234,7 +236,7 @@ class Client:
         }
         if calendar_ids is not None:
             params["calendar_ids"] = calendar_ids
-        return self._request("GET", "/agenda", params=params)
+        return agenda_result(self._request("GET", "/agenda", params=params))
 
     def search_events(
         self,
@@ -455,7 +457,7 @@ class Client:
             data["name"] = name
         if description is not None:
             data["description"] = description
-        return self._request("PUT", f"/events/{event_id}", json_data=data)
+        return mutation_result(self._request("PUT", f"/events/{event_id}", json_data=data))
     
     def update_event_from_text(
         self,
@@ -475,17 +477,19 @@ class Client:
         }
         if description is not None:
             data["description"] = description
-        return self._request(
-            "PUT", f"/events/{event_id}/from-recurrence-text", json_data=data
+        return mutation_result(
+            self._request(
+                "PUT", f"/events/{event_id}/from-recurrence-text", json_data=data
+            )
         )
     
-    def delete_event(self, event_id: str) -> None:
-        """Delete an event."""
-        self._request("DELETE", f"/events/{event_id}")
+    def delete_event(self, event_id: str) -> Any:
+        """Delete an event. Returns message and sync_warnings when the API sends them."""
+        return mutation_result(self._request("DELETE", f"/events/{event_id}"))
     
-    def toggle_event(self, event_id: str) -> dict[str, Any]:
+    def toggle_event(self, event_id: str) -> Any:
         """Toggle event active status."""
-        return self._request("PATCH", f"/events/{event_id}/toggle")
+        return mutation_result(self._request("PATCH", f"/events/{event_id}/toggle"))
     
     def get_event_instances(
         self,
@@ -531,10 +535,12 @@ class Client:
         event_ids: List[str],
     ) -> Dict[str, Any]:
         """Remove multiple events from a calendar (unlink only; events are not deleted)."""
-        return self._request(
-            "POST",
-            f"/calendars/{calendar_id}/events/batch-unlink",
-            json_data={"event_ids": event_ids},
+        return mutation_result(
+            self._request(
+                "POST",
+                f"/calendars/{calendar_id}/events/batch-unlink",
+                json_data={"event_ids": event_ids},
+            )
         )
 
     def link_event_to_calendar(
@@ -550,16 +556,20 @@ class Client:
             data["display_order"] = display_order
         if color_override is not None:
             data["color_override"] = color_override
-        return self._request(
-            "POST",
-            f"/calendars/{calendar_id}/events/{event_id}",
-            json_data=data,
+        return mutation_result(
+            self._request(
+                "POST",
+                f"/calendars/{calendar_id}/events/{event_id}",
+                json_data=data,
+            )
         )
 
     def unlink_event_from_calendar(
         self,
         calendar_id: str,
         event_id: str,
-    ) -> None:
-        """Unlink an event from a calendar."""
-        self._request("DELETE", f"/calendars/{calendar_id}/events/{event_id}")
+    ) -> Any:
+        """Unlink an event from a calendar. Returns sync_warnings when the API sends them."""
+        return mutation_result(
+            self._request("DELETE", f"/calendars/{calendar_id}/events/{event_id}")
+        )

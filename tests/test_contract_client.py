@@ -81,7 +81,6 @@ def test_login_failure_does_not_refresh(mock_token_file):
         assert _calls(rsps, "/auth/token/extend") == []
 
 
-@pending("get_agenda returns an object with .events and .failures")
 def test_get_agenda_exposes_events_and_failures(client):
     body = load_fixture("agenda_batch.json")
     with responses.RequestsMock(assert_all_requests_are_fired=False) as rsps:
@@ -233,7 +232,6 @@ def test_resend_verification_upstream(client):
     assert err.next_step == body["next_step"]
 
 
-@pending("update_event returns an object that carries .sync_warnings")
 def test_update_event_exposes_sync_warnings(client):
     body = load_fixture("event_with_sync_warnings.json")
     with responses.RequestsMock(assert_all_requests_are_fired=False) as rsps:
@@ -244,7 +242,6 @@ def test_update_event_exposes_sync_warnings(client):
     assert field(warnings[0], "event_name") == "Team standup"
 
 
-@pending("toggle_event returns an object that carries .sync_warnings")
 def test_toggle_event_exposes_sync_warnings(client):
     body = load_fixture("event_with_sync_warnings.json")
     with responses.RequestsMock(assert_all_requests_are_fired=False) as rsps:
@@ -254,7 +251,6 @@ def test_toggle_event_exposes_sync_warnings(client):
     assert field(warnings[0], "reason") == "trial_paused"
 
 
-@pending("delete_event returns the {message, sync_warnings} body instead of None")
 def test_delete_event_returns_sync_warnings(client):
     body = load_fixture("delete_event.json")
     with responses.RequestsMock(assert_all_requests_are_fired=False) as rsps:
@@ -265,7 +261,6 @@ def test_delete_event_returns_sync_warnings(client):
     assert field(warnings[0], "calendar_name") == "Work"
 
 
-@pending("unlink_event_from_calendar returns sync_warnings instead of None")
 def test_unlink_event_returns_sync_warnings(client):
     body = load_fixture("unlink_event.json")
     path = f"/calendars/{CALENDAR_ID}/events/{EVENT_ID}"
@@ -276,7 +271,6 @@ def test_unlink_event_returns_sync_warnings(client):
     assert field(warnings[0], "user_message")
 
 
-@pending("batch_remove_events_from_calendar returns an object with .sync_warnings")
 def test_batch_unlink_exposes_sync_warnings(client):
     body = load_fixture("batch_unlink.json")
     path = f"/calendars/{CALENDAR_ID}/events/batch-unlink"
@@ -287,7 +281,24 @@ def test_batch_unlink_exposes_sync_warnings(client):
     assert field(warnings[0], "next_step") == "Upgrade"
 
 
-@pending("link_event_to_calendar returns an object with .google_export_warnings")
+def test_update_event_from_text_exposes_sync_warnings(client):
+    body = load_fixture("event_with_sync_warnings.json")
+    with responses.RequestsMock(assert_all_requests_are_fired=False) as rsps:
+        rsps.add(
+            responses.PUT,
+            f"{API}/events/{EVENT_ID}/from-recurrence-text",
+            json=body,
+            status=200,
+        )
+        result = client.update_event_from_text(
+            EVENT_ID,
+            recurrence_text="Every weekday at 9",
+            name="Team standup",
+        )
+    warnings = require_attr(result, "sync_warnings")
+    assert field(warnings[0], "reason") == "trial_paused"
+
+
 def test_link_event_exposes_export_warnings(client):
     body = load_fixture("link_event.json")
     path = f"/calendars/{CALENDAR_ID}/events/{EVENT_ID}"
