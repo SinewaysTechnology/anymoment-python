@@ -15,9 +15,23 @@ class AnyMomentCommand(click.Command):
         return super().invoke(ctx)
 
 
+_ALIASES = {"a": "agenda"}
+
+
 class AnyMomentGroup(click.Group):
     command_class = AnyMomentCommand
     group_class = type
+
+    def get_command(self, ctx, cmd_name):
+        if ctx.parent is None and cmd_name == "ls":
+            calendars = super().get_command(ctx, "calendars")
+            if calendars is not None:
+                return calendars.get_command(ctx, "list")
+        if ctx.parent is None and cmd_name == "rm":
+            events = super().get_command(ctx, "events")
+            if events is not None:
+                return events.get_command(ctx, "delete")
+        return super().get_command(ctx, _ALIASES.get(cmd_name, cmd_name))
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

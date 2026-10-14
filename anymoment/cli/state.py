@@ -6,6 +6,7 @@ Values live on the root context and in a context var the command body can read.
 
 import contextvars
 import json
+import os
 import sys
 from typing import Any, Optional
 
@@ -50,6 +51,8 @@ def remember(ctx: click.Context, param: click.Parameter, value: Any) -> Any:
             data[param.name] = True
     elif value is not None:
         data[param.name] = value
+    if param.name == "profile" and value:
+        os.environ["ANYMOMENT_PROFILE"] = str(value)
     _STATE.set(data)
     return value
 
@@ -79,6 +82,13 @@ def global_options() -> list[click.Option]:
             is_eager=True,
             callback=remember,
             help="Comma-separated fields to keep in JSON output.",
+        ),
+        click.Option(
+            ["--profile"],
+            expose_value=False,
+            is_eager=True,
+            callback=remember,
+            help="Config profile name. Overrides ANYMOMENT_PROFILE.",
         ),
         click.Option(
             ["--yes", "-y"],

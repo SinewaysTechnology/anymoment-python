@@ -38,10 +38,12 @@ dependencies = [
 [project.optional-dependencies]
 cli = [
     "click>=8.0.0",
+    "rich>=13.0.0",
 ]
 
 [project.scripts]
 anymoment = "anymoment.cli.commands:cli"
+am = "anymoment.cli.commands:cli"
 
 [project.urls]
 Homepage = "https://anymoment.sineways.tech"

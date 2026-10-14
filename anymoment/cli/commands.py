@@ -14,6 +14,7 @@ from dateutil import tz as dateutil_tz
 from anymoment import __version__
 from anymoment.cli.exitcodes import EXIT_AUTH, EXIT_CODE_NAMES, EXIT_USAGE
 from anymoment.cli.group import AgendaGroup, AnyMomentGroup
+from anymoment.cli.human import paint, render_table
 from anymoment.cli.idempotency import lookup as lookup_idempotency
 from anymoment.cli.idempotency import store as store_idempotency
 from anymoment.cli.state import (
@@ -79,8 +80,16 @@ def resolve_calendar_id(client, calendar_ref: Optional[str]):
         click.echo(f"[ERROR] No calendar found with name '{ref}'. Use 'anymoment calendars list' to see calendars.", err=True)
         sys.exit(1)
     if len(matches) > 1:
-        click.echo(f"[ERROR] Multiple calendars match '{ref}'. Use calendar ID instead.", err=True)
-        sys.exit(1)
+        if sys.stdin.isatty() and not machine():
+            labels = [f"{cal.get('name')} ({cal.get('id')})" for cal in matches]
+            choice = click.prompt("Which calendar?", type=click.Choice(labels), show_choices=True)
+            return matches[labels.index(choice)].get("id")
+        click.echo(
+            f"[ERROR] Multiple calendars match '{ref}'. Use the calendar ID. "
+            "A picker is available on a terminal.",
+            err=True,
+        )
+        sys.exit(EXIT_USAGE)
     return matches[0].get("id")
 
 
@@ -197,13 +206,18 @@ def format_output(data, raw=False, pipe=False):
                     score = item.get("score")
                     if score is not None:
                         name = f"{name} (score: {score:.2f})"
-                    click.echo(f"  {name}")
+                    click.echo(f"  {paint(name, bold=True)}")
+                    origin = ev.get("external_origin") or {}
+                    if ev.get("google_origin") or (isinstance(origin, dict) and origin.get("read_only")):
+                        click.echo("    read-only")
                     for inst in item.get("instances") or []:
                         start_ts = inst.get("start") or ""
                         end_ts = inst.get("end") or ""
                         all_day = inst.get("is_all_day", False)
                         suffix = " [all day]" if all_day else ""
                         click.echo(f"    {start_ts} – {end_ts}{suffix}")
+                return
+            if data and all(isinstance(item, dict_type) for item in data) and render_table(data):
                 return
             # Format as table for better readability
             for idx, item in enumerate(data, 1):
@@ -808,6 +822,10 @@ def _print_agenda(events, failures, raw, pipe):
 @click.option("--pipe", is_flag=True, help="Output only event IDs")
 def agenda_show(window, calendar, host, raw, pipe):
     """One-call agenda. Example: anymoment agenda \"next week\"."""
+    _show_window(window, calendar, host, raw, pipe)
+
+
+def _show_window(window, calendar, host, raw, pipe):
     try:
         start_iso, end_iso = resolve_window(window or "today", get_default_timezone())
     except DateParseError as exc:
@@ -1198,6 +1216,15 @@ def _schema_document():
         "v": 1,
         "commands": walk(cli, ""),
         "exit_codes": {name: code for code, name in EXIT_CODE_NAMES.items()},
+        "aliases": {
+            "a": "agenda",
+            "am": "anymoment",
+            "ls": "calendars list",
+            "rm": "events delete",
+            "today": "agenda today",
+            "week": "agenda this week",
+            "next": "agenda next week",
+        },
         "flags": [
             "--json",
             "--jsonl",
@@ -1205,6 +1232,7 @@ def _schema_document():
             "--yes",
             "--dry-run",
             "--idempotency-key",
+            "--profile",
         ],
     }
 
@@ -1227,6 +1255,46 @@ def help_command(topic):
         _echo_schema()
         return
     click.echo(cli.get_help(click.Context(cli)))
+
+
+def _window_options(func):
+    func = click.option("--pipe", is_flag=True, help="Output only event IDs")(func)
+    func = click.option("--raw", is_flag=True, help="Output full JSON")(func)
+    func = click.option("--host", "-h", default=None, help="API host URL")(func)
+    func = click.option("--calendar", "-c", default=None, help="Calendar name or ID")(func)
+    return func
+
+
+@cli.command("today")
+@_window_options
+def today(calendar, host, raw, pipe):
+    """Show today's agenda."""
+    _show_window("today", calendar, host, raw, pipe)
+
+
+@cli.command("week")
+@_window_options
+def week(calendar, host, raw, pipe):
+    """Show this week's agenda."""
+    _show_window("this week", calendar, host, raw, pipe)
+
+
+@cli.command("next")
+@_window_options
+def next_window(calendar, host, raw, pipe):
+    """Show next week's agenda."""
+    _show_window("next week", calendar, host, raw, pipe)
+
+
+@cli.command("completion")
+@click.argument("shell", type=click.Choice(["bash", "zsh", "fish"]))
+def completion(shell):
+    """Print a shell completion snippet for bash, zsh, or fish."""
+    variable = "_ANYMOMENT_COMPLETE"
+    if shell == "fish":
+        click.echo(f"{variable}=fish_source anymoment | source")
+        return
+    click.echo(f'eval "$({variable}={shell}_source anymoment)"')
 
 
 @events.command("batch")
