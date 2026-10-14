@@ -141,8 +141,6 @@ am calendars subscriptions replay <calendar-id> <subscription-id> <delivery-id>
 
 ## Version 2.0
 
-2.0 requires Python 3.10 or newer. The migration notes, including 2.0.1, 1.0.0, and 0.1.0, are in [CHANGELOG.md](CHANGELOG.md).
-
 `get_agenda` returns an object with `.events` and `.failures`. It is not a list. Delete, unlink, update, toggle, and link return their warning fields (`.message`, `.sync_warnings`, or `.google_export_warnings`) instead of dropping the response body.
 
 Errors expose `.message`, `.next_step`, and `.retry_after`, plus `code` and `user_message`. New types cover unverified email, permission denied (403), conflict (409), unprocessable input (422), and rate limits (429, `.retry_after`). A 401 refreshes the session token only for a real AnyMoment session. Login and CalDAV `auth_failed` do not refresh.
@@ -276,7 +274,7 @@ anymoment calendars webhook-url <id>
 
 ### Calendar subscriptions
 
-Outgoing webhook subscriptions for one calendar. Create the signing secret in this response and store it. `am auth status` is separate: that command never prints an API key secret.
+Outgoing webhook subscriptions for one calendar. If you don't pass --secret, AnyMoment generates one and shows it once in the create response. Store it; later responses don't include it.
 
 ```bash
 anymoment calendars subscriptions list <calendar-id>
