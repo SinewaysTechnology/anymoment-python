@@ -230,11 +230,12 @@ def test_env_token_skips_prompt(monkeypatch, mock_config_file):
     seen = {}
 
     class Fake:
-        def __init__(self, api_url=None, token=None):
+        def __init__(self, api_url=None, token=None, api_key=None):
             seen["token"] = token
 
-        def _set_token(self, token):
+        def adopt_token(self, token):
             seen["saved"] = token
+            return token
 
     monkeypatch.setattr("anymoment.cli.commands.Client", Fake)
     result = CliRunner().invoke(cli, ["auth", "login", "--json"])

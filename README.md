@@ -14,13 +14,33 @@ Python SDK and command-line interface for the [AnyMoment API](https://api.anymom
 
 ## Installation
 
-### Library Only
+AnyMoment requires Python 3.10 or newer. The Python that ships with macOS is often 3.9. pip then stops before it installs anything:
+
+```text
+ERROR: Package 'anymoment' requires a different Python: 3.9.x not in '>=3.10'
+```
+
+That message means this interpreter is too old. Install the CLI with a current Python. `uv` and `pipx` provide one:
+
+```bash
+uv tool install "anymoment[cli]"
+```
+
+```bash
+pipx install "anymoment[cli]"
+```
+
+Running the `am` command with Python 3.9 prints the same requirement and these two commands, then exits.
+
+### Library only
+
+Use this when the active Python is already 3.10 or newer:
 
 ```bash
 pip install "anymoment"
 ```
 
-### With CLI
+### CLI in the current environment
 
 ```bash
 pip install "anymoment[cli]"
@@ -29,7 +49,7 @@ pip install "anymoment[cli]"
 ## Quick Start
 
 ```bash
-pip install "anymoment[cli]"
+uv tool install "anymoment[cli]"
 am auth login
 am today
 am today --json --fields events,failures
@@ -106,7 +126,7 @@ am calendars list --json
 am events list --calendar <calendar-id> --json
 ```
 
-`am auth status` shows whether the command is using an API key, `ANYMOMENT_TOKEN`, or a saved login. It prints the key prefix (`am_live_` plus the eight hex characters) and never prints the secret.
+`am auth status` shows whether the command is using an API key, `ANYMOMENT_TOKEN`, or a saved login. It checks that credential with the server and reports `valid`, `expired`, `invalid`, or `unknown`. It prints the key prefix (`am_live_` plus the eight hex characters) and never prints the secret. A failed login does not write a token.
 
 Keys can allow `events:read`, `events:write`, `calendars:read`, and `webhooks:manage`. A key can also be limited to specific calendars. A calendar-limited key cannot call `GET /events`. Pass a calendar id and the client calls `GET /calendars/{calendar_id}/events`. Each item is the event plus its link.
 
@@ -219,8 +239,8 @@ anymoment auth login --email you@example.com --password "$ANYMOMENT_PASSWORD"
 # Send the verification email again
 anymoment auth resend-verification --json
 
-# Show whether this command is using an API key, ANYMOMENT_TOKEN, or a saved login.
-# Prints the key prefix only. Does not call the API.
+# Check the credential with the server. Status is valid, expired, invalid, or unknown.
+# Prints the key prefix only. Does not print the secret.
 anymoment auth status
 
 # Or pass the key once. Same precedence as ANYMOMENT_API_KEY.
@@ -292,6 +312,20 @@ anymoment calendars subscriptions replay <calendar-id> <subscription-id> <delive
 # Create event from natural language
 anymoment events create "TEXT" [--name NAME] [--description TEXT] [--timezone TZ] [--calendar ID] [--model MODEL]
 
+# Create one event from exact fields. Does not call the AI parser.
+am events add --title "Dentist" --start 2026-10-16T15:00:00 --end 2026-10-16T15:30:00 \
+  --calendar <calendar-id> --timezone America/New_York --location "Clinic" --json
+
+# Weekly, with an RRULE. Location is stored as a line in the description.
+am events add --title "Standup" --start 2026-10-19T09:00:00 --end 2026-10-19T09:15:00 \
+  --rrule "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR" --timezone UTC --json
+
+# Batch from a JSON array or JSONL file. Use --file - to read stdin.
+am events add --file events.jsonl --json
+
+# Import an iCalendar file
+am events import ./calendar.ics --calendar <calendar-id> --json
+
 # List events
 anymoment events list [--calendar ID] [--active/--inactive] [--limit N] [--offset N] [--minimal]
 
@@ -329,8 +363,10 @@ anymoment today
 anymoment week
 anymoment next
 
-# List events and instances in a time window (agenda)
+# List events and instances in a time window (agenda).
+# JSON and the human view include summary.by_calendar and summary.by_month.
 anymoment agenda list [--start ISO] [--end ISO] [--calendar ID] [--no-cache] [--webhooks]
+am --json agenda list --start 2026-10-01T00:00:00Z --end 2026-10-31T23:59:59Z
 
 # Fuzzy search events by name (optional time window and filters)
 anymoment agenda search <query> [--start ISO] [--end ISO] [--calendar ID] [--active/--inactive] [--limit N] [--offset N] [--no-instances]
@@ -407,6 +443,9 @@ client = Client(
 - `client.list_calendar_events(calendar_id, is_active=None, limit=None, offset=None)` - Events on one calendar, each item `{event, link}`
 - `client.get_event(event_id)` - Get event by ID
 - `client.create_event_from_text(recurrence_text, name=None, description=None, timezone="UTC", calendar_id=None, model="high")` - Create event from natural language
+- `client.create_scheduled_event(title, start, end=None, all_day=False, rrule=None, description=None, location=None, timezone="UTC", calendar_id=None)` - Create one event from exact fields (`POST /events`), then link `calendar_id`
+- `client.create_scheduled_events(records, default_timezone="UTC", default_calendar_id=None)` - Create many exact-field events. Each record uses `title` or `name`, plus `start`
+- `client.create_event_from_ics(ics_content, name=None, description=None, timezone=None)` - Create events from ICS text
 - `client.update_event(event_id, name=None, description=None)` - Update event
 - `client.delete_event(event_id)` - Delete event
 - `client.toggle_event(event_id)` - Toggle event active status
@@ -422,7 +461,7 @@ client = Client(
 
 - `client.link_event_to_calendar(calendar_id, event_id, display_order=None, color_override=None)` - Add one event to a calendar
 - `client.unlink_event_from_calendar(calendar_id, event_id)` - Remove one event from a calendar (unlink only; event is not deleted)
-- `client.batch_add_events_to_calendar(calendar_id, event_ids, display_order=None, color_override=None)` - Add multiple events to a calendar in one request
+- `client.batch_add_events_to_calendar(calendar_id, event_ids, display_order=None, color_override=None)` - Add multiple events. Returns `{results, warnings}` with one item per event
 - `client.batch_remove_events_from_calendar(calendar_id, event_ids)` - Remove multiple events from a calendar (unlink only)
 
 #### Accounts, passwords, and tokens
