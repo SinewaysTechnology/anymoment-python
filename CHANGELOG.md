@@ -1,5 +1,32 @@
 # Changelog
 
+## [Unreleased]
+
+### Structured events
+
+- `am events add` creates one event from `--title`, `--start`, `--end`, `--all-day`, `--calendar`, `--rrule`, `--description`, `--location`, and `--timezone`. It calls `POST /events` with `name`, `description`, and `components`. It does not call the natural-language extractor. `--location` is stored as a `Location:` line because that create body has no location field.
+- `am events add --file events.jsonl` (or a JSON array, or `--file -`) creates many events the same way. Each object can use `title` or `name`.
+- `Client.create_scheduled_event` and `Client.create_scheduled_events` are the same calls.
+- `am events import <file.ics>` sends the file to `POST /events/from-ics` and can link a calendar afterwards.
+
+### Calendar batch add
+
+- `batch_add_events_to_calendar` returns `{results, warnings}`. Each result has `ok`, `event_id`, `link`, `warnings`, and `error`. A bare link and a `{link, google_export_warnings}` item both work.
+- An HTTP 500 whose body is a Python traceback is reported as a server failure with a next step. The traceback is not printed.
+
+### Auth
+
+- `am auth status` checks the credential with the server and reports `valid`, `expired`, `invalid`, or `unknown`.
+- A failed login, including a token the server rejects, does not write the token file.
+
+### Agenda
+
+- `am agenda list` and `am agenda` include `summary.by_calendar` and `summary.by_month` in `--json` and in the human view.
+
+### Install
+
+- Python 3.9 exits with instructions to install via `uv tool install "anymoment[cli]"` or `pipx install "anymoment[cli]"`. The package still requires Python 3.10 or newer.
+
 ## [2.1.0] - 2026-10-14
 
 ### API keys

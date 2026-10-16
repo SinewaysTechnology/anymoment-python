@@ -45,6 +45,9 @@ def test_login_success(mock_save_token, mock_session_class, mock_api_response):
     
     response = mock_api_response(status_code=200, text='"test-token-123"')
     mock_session.post.return_value = response
+    mock_session.request.return_value = mock_api_response(
+        status_code=200, json_data={"email": "test@example.com"}
+    )
     
     client = Client(api_url="https://api.anymoment.sineways.tech")
     token = client.login("test@example.com", "password")

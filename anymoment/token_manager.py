@@ -134,6 +134,33 @@ def _is_token_expired(token: str) -> bool:
         return True
 
 
+def peek_token(host_url: str) -> Optional[str]:
+    """Return the stored token even when it is expired. Does not print it."""
+    token_data = _load_tokens().get(host_url)
+    if not token_data:
+        return None
+    token = token_data.get("token")
+    return token or None
+
+
+def token_expiry_state(token: str) -> str:
+    """Classify a JWT locally as current, expired, or invalid. Does not call the server."""
+    if not isinstance(token, str) or token.count(".") < 2:
+        return "invalid"
+    try:
+        decoded = jwt.decode(token, options={"verify_signature": False})
+    except Exception:
+        return "invalid"
+    exp = decoded.get("exp")
+    if exp is None:
+        return "current"
+    try:
+        expired = datetime.now(timezone.utc).timestamp() >= float(exp)
+    except (TypeError, ValueError):
+        return "invalid"
+    return "expired" if expired else "current"
+
+
 def get_token(host_url: str) -> Optional[str]:
     """Get stored token for a host URL."""
     tokens = _load_tokens()

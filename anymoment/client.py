@@ -9,9 +9,11 @@ import requests
 from anymoment.config import get_api_url
 from anymoment.exceptions import (
     AnyMomentException,
+    ApiKeyExpiredError,
     AuthenticationError,
     CALENDAR_LIMITED_EVENTS_NEXT_STEP,
     PermissionDeniedError,
+    ServerError,
     ValidationError,
     exception_for_status,
     parse_error_payload,
@@ -22,7 +24,8 @@ from anymoment.caldav import CalDavClient
 from anymoment.endpoints import EndpointsMixin
 from anymoment.google import GoogleAPI
 from anymoment.models import AgendaResult, agenda_result, mutation_result
-from anymoment.token_manager import get_token, save_token
+from anymoment.schedule import ScheduleError, build_scheduled_event, record_to_kwargs
+from anymoment.token_manager import get_token, save_token, token_expiry_state
 
 
 class Client(EndpointsMixin):
@@ -198,13 +201,61 @@ class Client(EndpointsMixin):
             timeout=30,
         )
         
-        if response.status_code == 200:
-            token = response.text.strip().strip('"')  # Token is returned as plain text
-            self._set_token(token)
-            return token
-        else:
+        if response.status_code != 200:
             self._handle_response(response)
-            return ""  # Should not reach here
+            return ""
+        token = response.text.strip().strip('"')
+        if not token:
+            raise AuthenticationError(
+                "Login did not return a token.",
+                user_message="Login failed. The server did not return a token.",
+                next_step="Check the email and password, then try again.",
+            )
+        return self.adopt_token(token)
+
+    def adopt_token(self, token: str) -> str:
+        """Check a token with the server, then save it. A rejected token is not saved."""
+        self._token = token
+        status = self.check_credentials()
+        if status != "valid":
+            self._token = None
+            if status == "expired":
+                message = "Login failed. The token is expired."
+                step = "Sign in again with `am auth login`."
+            elif status == "unknown":
+                message = "Login failed. The token could not be verified."
+                step = "Check the network and the API host, then try again."
+            else:
+                message = "Login failed. The server rejected the token."
+                step = "Check the email and password, or set a current ANYMOMENT_TOKEN."
+            raise AuthenticationError(message, user_message=message, next_step=step)
+        save_token(self.api_url, token)
+        return token
+
+    def check_credentials(self) -> str:
+        """Ask the server whether the current credential works.
+
+        Returns ``valid``, ``expired``, ``invalid``, or ``unknown``.
+        Does not refresh or save a token.
+        """
+        path = "/calendars" if self._api_key else "/auth/me"
+        params = {"limit": 1} if self._api_key else None
+        try:
+            self._request("GET", path, params=params, retry_on_auth_error=False)
+        except ApiKeyExpiredError:
+            return "expired"
+        except AuthenticationError as exc:
+            text = f"{exc.code or ''} {exc.user_message or ''}".lower()
+            if "expir" in text:
+                return "expired"
+            if self._token and not self._api_key and token_expiry_state(self._token) == "expired":
+                return "expired"
+            return "invalid"
+        except PermissionDeniedError:
+            return "valid"
+        except AnyMomentException:
+            return "unknown"
+        return "valid"
     
     def refresh_token(self) -> str:
         """
@@ -543,6 +594,104 @@ class Client(EndpointsMixin):
         if calendar_id is not None:
             data["calendar_id"] = calendar_id
         return self._request("POST", "/events/from-recurrence-text", json_data=data)
+
+    def create_scheduled_event(
+        self,
+        title: str,
+        start: str,
+        end: Optional[str] = None,
+        all_day: bool = False,
+        rrule: Optional[str] = None,
+        description: Optional[str] = None,
+        location: Optional[str] = None,
+        timezone: str = "UTC",
+        calendar_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Create one event from exact fields via POST /events, then link a calendar.
+
+        This does not call the natural-language extractor. ``location`` is stored
+        in the description because the create body has no location field.
+        """
+        body = build_scheduled_event(
+            title=title,
+            start=start,
+            end=end,
+            all_day=all_day,
+            rrule=rrule,
+            description=description,
+            location=location,
+            timezone=timezone,
+        )
+        created = self.create_event(
+            body["name"],
+            body["components"],
+            description=body.get("description"),
+        )
+        event = created.as_dict() if hasattr(created, "as_dict") else dict(created)
+        result: Dict[str, Any] = {"event": event, "link": None, "warnings": []}
+        warnings = getattr(created, "sync_warnings", None) or []
+        if isinstance(warnings, list):
+            result["warnings"].extend(warnings)
+        if not calendar_id:
+            return result
+        event_id = event.get("id")
+        if not isinstance(event_id, str) or not event_id:
+            raise ScheduleError("The server created an event without an id.")
+        try:
+            linked = self.link_event_to_calendar(calendar_id, event_id)
+        except AnyMomentException as exc:
+            note = f"The event was created ({event_id}) but it is not on the calendar."
+            if exc.next_step:
+                exc.next_step = f"{note} {exc.next_step}"
+            else:
+                exc.next_step = note + " Link it with `am calendars add-event`."
+            raise
+        link_body = linked.as_dict() if hasattr(linked, "as_dict") else linked
+        if isinstance(link_body, dict):
+            result["link"] = link_body.get("link", link_body)
+            extra = link_body.get("google_export_warnings") or []
+            if isinstance(extra, list):
+                result["warnings"].extend(extra)
+        return result
+
+    def create_scheduled_events(
+        self,
+        records: List[Any],
+        default_timezone: str = "UTC",
+        default_calendar_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Create many exact-field events. Local problems are rejected before any request."""
+        prepared = []
+        for index, record in enumerate(records):
+            try:
+                prepared.append(
+                    (index, record_to_kwargs(record, default_timezone, default_calendar_id))
+                )
+            except ScheduleError as exc:
+                raise ScheduleError(f"Event {index + 1}: {exc.user_message}") from exc
+        results = []
+        for index, fields in prepared:
+            try:
+                created = self.create_scheduled_event(**fields)
+            except AuthenticationError:
+                raise
+            except AnyMomentException as exc:
+                results.append(
+                    {
+                        "ok": False,
+                        "index": index,
+                        "title": fields.get("title"),
+                        "error": {
+                            "code": exc.code,
+                            "status": exc.status_code,
+                            "user_message": exc.user_message,
+                            "next_step": exc.next_step,
+                        },
+                    }
+                )
+                continue
+            results.append({"ok": True, "index": index, **created})
+        return {"results": results}
     
     def update_event(
         self,
@@ -619,14 +768,19 @@ class Client(EndpointsMixin):
         event_ids: List[str],
         display_order: Optional[int] = None,
         color_override: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
-        """Add multiple events to a calendar in one request."""
+    ) -> Dict[str, Any]:
+        """Add multiple events to a calendar in one request.
+
+        Returns ``{results, warnings}``. Each result is one event: ``ok``,
+        ``event_id``, ``link``, ``warnings``, and ``error``.
+        """
         data: Dict[str, Any] = {"event_ids": event_ids}
         if display_order is not None:
             data["display_order"] = display_order
         if color_override is not None:
             data["color_override"] = color_override
-        return self._request("POST", f"/calendars/{calendar_id}/events", json_data=data)
+        payload = self._request("POST", f"/calendars/{calendar_id}/events", json_data=data)
+        return normalize_batch_add(payload)
 
     def batch_remove_events_from_calendar(
         self,
@@ -693,6 +847,79 @@ def api_key_prefix(api_key: str) -> Optional[str]:
     if any(char not in "0123456789abcdefABCDEF" for char in prefix):
         return None
     return f"am_live_{prefix}"
+
+
+def _warning_list(row: Any) -> List[Any]:
+    if not isinstance(row, dict):
+        return []
+    for key in ("google_export_warnings", "sync_warnings", "warnings"):
+        value = row.get(key)
+        if isinstance(value, list):
+            return value
+    return []
+
+
+def _one_batch_link(row: Any) -> Dict[str, Any]:
+    """One batch-add item, whether the API sent a link or a link plus warnings."""
+    error = None
+    ok = True
+    link: Any = None
+    warnings: List[Any] = []
+    if isinstance(row, dict) and isinstance(row.get("link"), dict):
+        link = row["link"]
+        warnings = _warning_list(row)
+        error = row.get("error")
+        ok = row.get("ok", error is None)
+    elif isinstance(row, dict) and (row.get("error") or row.get("ok") is False):
+        link = row.get("link")
+        warnings = _warning_list(row)
+        error = row.get("error") or row.get("user_message")
+        ok = False
+    elif isinstance(row, dict):
+        link = row
+    else:
+        ok = False
+        error = "Unexpected item in the batch-add response."
+    event_id = link.get("event_id") if isinstance(link, dict) else None
+    if event_id is None and isinstance(row, dict):
+        event_id = row.get("event_id")
+    return {
+        "ok": bool(ok) and error is None,
+        "event_id": event_id,
+        "link": link,
+        "warnings": warnings,
+        "error": error,
+    }
+
+
+def normalize_batch_add(payload: Any) -> Dict[str, Any]:
+    """Per-item links and warnings from POST /calendars/{id}/events.
+
+    A bare link list and a list of ``{link, google_export_warnings}`` both work.
+    A non-document body becomes a server error instead of a traceback.
+    """
+    if isinstance(payload, dict) and isinstance(payload.get("results"), list):
+        rows = payload["results"]
+    elif isinstance(payload, dict) and isinstance(payload.get("links"), list):
+        rows = payload["links"]
+    elif isinstance(payload, dict):
+        rows = [payload]
+    elif isinstance(payload, list):
+        rows = payload
+    else:
+        raise ServerError(
+            "The server returned an unexpected batch-add response.",
+            user_message="The server returned an unexpected batch-add response.",
+            next_step=(
+                "Retry `am calendars batch-add-events`. "
+                "If it keeps failing, the calendar service still needs a fix."
+            ),
+        )
+    results = [_one_batch_link(row) for row in rows]
+    warnings: List[Any] = []
+    for item in results:
+        warnings.extend(item["warnings"])
+    return {"results": results, "warnings": warnings}
 
 
 def _event_is_active(item: Any) -> Optional[bool]:
