@@ -342,6 +342,12 @@ def parse_error_payload(
     )
 
 
+def _looks_like_traceback(text: str) -> bool:
+    if "Traceback (most recent call last)" in text:
+        return True
+    return "Traceback" in text and 'File "' in text
+
+
 def exception_for_status(status_code: int, parsed: ParsedError) -> AnyMomentException:
     """Map an HTTP status and a parsed body onto a typed error."""
     next_step = parsed.next_step
@@ -361,6 +367,17 @@ def exception_for_status(status_code: int, parsed: ParsedError) -> AnyMomentExce
         "raw": parsed.raw,
     }
     message = parsed.message
+    user_message = parsed.user_message
+    if status_code >= 500 and _looks_like_traceback(message):
+        message = f"The server failed while handling this request (HTTP {status_code})."
+        user_message = message
+        if next_step is None:
+            next_step = (
+                "Retry the command. The calendar service returned an internal error, "
+                "not a problem with these arguments."
+            )
+        kwargs["user_message"] = user_message
+        kwargs["next_step"] = next_step
     if (
         status_code == 401
         and parsed.plain

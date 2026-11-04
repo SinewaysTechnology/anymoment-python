@@ -1,5 +1,12 @@
 """AnyMoment Python SDK - API client and CLI for AnyMoment calendar service."""
 
+import sys
+
+if sys.version_info < (3, 10):
+    from anymoment_entry import python_too_old_message
+
+    raise ImportError(python_too_old_message())
+
 from anymoment.client import Client
 from anymoment.exceptions import (
     AnyMomentException,

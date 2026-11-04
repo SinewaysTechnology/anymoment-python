@@ -268,7 +268,9 @@ def test_webhook_signature_is_hmac_of_timestamp_and_raw_body():
 def test_auth_status_hides_the_secret(runner, mock_token_file, mock_config_file, monkeypatch):
     monkeypatch.setenv("ANYMOMENT_TOKEN", "env-token-should-not-print")
     monkeypatch.setenv("ANYMOMENT_API_KEY", OTHER_KEY)
-    result = runner.invoke(cli, ["--api-key", KEY, "auth", "status", "--json", "--host", API])
+    with responses.RequestsMock(assert_all_requests_are_fired=False) as rsps:
+        rsps.add(responses.GET, f"{API}/calendars", json=[], status=200)
+        result = runner.invoke(cli, ["--api-key", KEY, "auth", "status", "--json", "--host", API])
     assert result.exit_code == EXIT_OK, result.output
     assert "supersecretvalue" not in result.stdout
     assert "supersecretvalue" not in result.stderr
@@ -283,19 +285,25 @@ def test_auth_status_hides_the_secret(runner, mock_token_file, mock_config_file,
 
 def test_auth_status_reports_saved_login(runner, mock_token_file, mock_config_file):
     save_token(API, _session_token())
-    result = runner.invoke(cli, ["auth", "status", "--json", "--host", API])
+    with responses.RequestsMock(assert_all_requests_are_fired=False) as rsps:
+        rsps.add(responses.GET, f"{API}/auth/me", json={"email": "a@example.com"}, status=200)
+        result = runner.invoke(cli, ["auth", "status", "--json", "--host", API])
     assert result.exit_code == EXIT_OK, result.output
     payload = json.loads(result.stdout)
     assert payload["method"] == "saved_login"
+    assert payload["status"] == "valid"
     assert payload["authenticated"] is True
     assert _session_token() not in result.stdout
 
 
 def test_auth_status_reports_env_token(runner, mock_token_file, mock_config_file, monkeypatch):
     monkeypatch.setenv("ANYMOMENT_TOKEN", "env-token-should-not-print")
-    result = runner.invoke(cli, ["auth", "status", "--host", API])
+    with responses.RequestsMock(assert_all_requests_are_fired=False) as rsps:
+        rsps.add(responses.GET, f"{API}/auth/me", json={"email": "a@example.com"}, status=200)
+        result = runner.invoke(cli, ["auth", "status", "--host", API])
     assert result.exit_code == EXIT_OK
     assert "ANYMOMENT_TOKEN" in result.output
+    assert "Status: valid" in result.output
     assert "env-token-should-not-print" not in result.output
 
 

@@ -12,7 +12,7 @@ import click
 from dateutil import tz as dateutil_tz
 
 from anymoment import __version__
-from anymoment.cli.exitcodes import EXIT_AUTH, EXIT_CODE_NAMES, EXIT_USAGE
+from anymoment.cli.exitcodes import EXIT_AUTH, EXIT_CODE_NAMES, EXIT_REMOTE, EXIT_USAGE
 from anymoment.cli.group import AgendaGroup, AnyMomentGroup
 from anymoment.cli.human import paint, render_table
 from anymoment.cli.idempotency import lookup as lookup_idempotency
@@ -36,11 +36,19 @@ from anymoment.config import (
 )
 from anymoment.dates import DateParseError, resolve_window
 from anymoment.exceptions import AuthenticationError
+from anymoment.schedule import (
+    ScheduleError,
+    build_scheduled_event,
+    load_event_records,
+    record_to_kwargs,
+    summarize_agenda,
+)
 from anymoment.token_manager import (
     clear_all_tokens,
     delete_token,
     get_token,
     list_tokens,
+    peek_token,
 )
 
 
@@ -88,8 +96,8 @@ def get_client(host=None, require_auth=True):
     return client
 
 
-def auth_status_payload(host: Optional[str] = None) -> dict[str, Any]:
-    """Which credential this command would use. Never includes a secret."""
+def _local_auth_status(host: Optional[str] = None) -> dict[str, Any]:
+    """Which credential is configured. Never includes a secret."""
     api_url = host or get_api_url()
     flag_key = _flag_api_key()
     env_key = _env_api_key()
@@ -101,6 +109,7 @@ def auth_status_payload(host: Optional[str] = None) -> dict[str, Any]:
             "key_prefix": api_key_prefix(key),
             "method": "api_key",
             "source": "flag" if flag_key else "env",
+            "status": "unverified",
         }
     if os.environ.get("ANYMOMENT_TOKEN"):
         return {
@@ -108,6 +117,7 @@ def auth_status_payload(host: Optional[str] = None) -> dict[str, Any]:
             "host": api_url,
             "method": "token",
             "source": "env",
+            "status": "unverified",
         }
     saved = list_tokens().get(api_url)
     if saved:
@@ -119,12 +129,38 @@ def auth_status_payload(host: Optional[str] = None) -> dict[str, Any]:
             "host": api_url,
             "method": "saved_login",
             "source": "file",
+            "status": "expired" if saved.get("expired") else ("invalid" if saved.get("invalid") else "unverified"),
         }
     return {
         "authenticated": False,
         "host": api_url,
         "method": "none",
+        "status": "none",
     }
+
+
+def _client_for_status(payload: dict[str, Any]) -> Client:
+    api_url = payload["host"]
+    if payload["method"] == "api_key":
+        return Client(api_url=api_url, api_key=resolve_api_key())
+    if payload["method"] == "token":
+        return Client(api_url=api_url, token=os.environ.get("ANYMOMENT_TOKEN"))
+    return Client(api_url=api_url, token=peek_token(api_url))
+
+
+def auth_status_payload(host: Optional[str] = None) -> dict[str, Any]:
+    """Credential in use, checked against the server. Never includes a secret."""
+    payload = _local_auth_status(host)
+    if payload["method"] == "none":
+        return payload
+    status = _client_for_status(payload).check_credentials()
+    payload["status"] = status
+    payload["authenticated"] = status == "valid"
+    if status == "expired":
+        payload["expired"] = True
+    if status == "unknown":
+        payload["next_step"] = "Could not reach the server to verify this credential. Retry `am auth status`."
+    return payload
 
 
 def resolve_calendar_id(client, calendar_ref: Optional[str]):
@@ -351,8 +387,11 @@ def login(email, password, host):
     api_url = host or get_api_url()
     env_token = os.environ.get("ANYMOMENT_TOKEN")
     if env_token and not email and not password:
-        client = Client(api_url=api_url, token=env_token)
-        client._set_token(env_token)
+        try:
+            client = Client(api_url=api_url, token=env_token)
+            client.adopt_token(env_token)
+        except Exception as e:
+            handle_api_error(e, "Login")
         if machine():
             emit({"status": "saved", "host": api_url})
         else:
@@ -412,7 +451,7 @@ def logout(host):
 @auth.command()
 @click.option("--host", "-h", default=None, help="API host URL")
 def status(host):
-    """Show which credential is in use. Does not print secrets or call the API."""
+    """Check the credential with the server. Does not print secrets."""
     payload = auth_status_payload(host)
     if machine():
         emit(payload)
@@ -424,8 +463,16 @@ def status(host):
         "saved_login": "saved login",
         "none": "not authenticated",
     }
+    status_labels = {
+        "valid": "valid",
+        "expired": "expired",
+        "invalid": "invalid",
+        "unknown": "unknown",
+        "none": "not authenticated",
+    }
     click.echo(f"Host: {payload['host']}")
     click.echo(f"Method: {labels.get(method, method)}")
+    click.echo(f"Status: {status_labels.get(payload.get('status'), payload.get('status'))}")
     if method == "api_key":
         prefix = payload.get("key_prefix")
         if prefix:
@@ -434,17 +481,14 @@ def status(host):
             click.echo("Key prefix: unrecognized (the secret is not shown)")
         click.echo(f"Source: {'--api-key' if payload.get('source') == 'flag' else 'ANYMOMENT_API_KEY'}")
     elif method == "saved_login":
-        if payload.get("expired"):
-            click.echo("Status: expired")
-        elif payload.get("authenticated"):
-            click.echo("Status: saved")
-        else:
-            click.echo("Status: not usable")
         if payload.get("expires_at"):
             click.echo(f"Expires: {payload['expires_at']}")
-        click.echo("Run 'anymoment auth login' to replace it, or set ANYMOMENT_API_KEY.")
+        if payload.get("status") != "valid":
+            click.echo("Run 'anymoment auth login' to replace it, or set ANYMOMENT_API_KEY.")
     elif method == "none":
         click.echo("Run 'anymoment auth login', set ANYMOMENT_TOKEN, or set ANYMOMENT_API_KEY.")
+    if payload.get("next_step"):
+        click.echo(payload["next_step"])
 
 
 @cli.group()
@@ -833,7 +877,7 @@ def create_subscription(calendar_id, url, event_types, secret, offset_seconds, h
         result = client.create_subscription(
             calendar_id,
             url=url,
-            event_types=list(event_types),
+            event_types=builtins.list(event_types),
             secret=secret,
             occurrence_offset_seconds=offset_seconds,
         )
@@ -891,7 +935,7 @@ def update_subscription(calendar_id, subscription_id, url, event_types, secret, 
             subscription_id,
             url=url,
             secret=secret,
-            event_types=list(event_types) or None,
+            event_types=builtins.list(event_types) or None,
             occurrence_offset_seconds=offset_seconds,
             is_active=active,
         )
@@ -1020,18 +1064,38 @@ def remove_event(calendar_id, event_id, host):
 @click.option("--host", "-h", help="API host URL")
 @click.option("--raw", is_flag=True, help="Output full JSON")
 def batch_add_events(calendar_id, event_ids, display_order, color, host, raw):
-    """Add multiple events to a calendar in one request."""
+    """Add multiple events to a calendar. Prints each link and any warnings."""
     try:
         client = get_client(host)
         result = client.batch_add_events_to_calendar(
             calendar_id=calendar_id,
-            event_ids=list(event_ids),
+            event_ids=builtins.list(event_ids),
             display_order=display_order,
             color_override=color,
         )
-        if not machine() and not raw:
-            click.echo(f"[OK] Added {len(result)} event(s) to calendar.\n")
-        format_output(result, raw=raw)
+        if not isinstance(result, dict) or "results" not in result:
+            from anymoment.client import normalize_batch_add
+
+            result = normalize_batch_add(result)
+        if machine() or raw:
+            format_output(result, raw=raw)
+            return
+        rows = result.get("results") or []
+        added = sum(1 for item in rows if item.get("ok"))
+        click.echo(f"[OK] Added {added} of {len(rows)} event(s) to the calendar.")
+        for item in rows:
+            label = item.get("event_id") or "event"
+            if item.get("ok"):
+                click.echo(f"  {label}")
+            else:
+                click.echo(f"  Failed: {label} {item.get('error') or ''}".rstrip())
+            for warning in item.get("warnings") or []:
+                message = warning.get("user_message") if isinstance(warning, dict) else str(warning)
+                step = warning.get("next_step") if isinstance(warning, dict) else ""
+                if message:
+                    click.echo(f"    {message}")
+                if step:
+                    click.echo(f"    {step}")
     except Exception as e:
         handle_api_error(e, "Batch add events to calendar")
 
@@ -1046,7 +1110,7 @@ def batch_remove_events(calendar_id, event_ids, host):
         client = get_client(host)
         result = client.batch_remove_events_from_calendar(
             calendar_id=calendar_id,
-            event_ids=list(event_ids),
+            event_ids=builtins.list(event_ids),
         )
         if result:
             count = result.get("count", len(event_ids))
@@ -1114,13 +1178,39 @@ def agenda():
     pass
 
 
+def _print_agenda_summary(summary):
+    click.echo(
+        f"{summary['events']} event(s), {summary['instances']} instance(s)"
+    )
+    if summary["by_calendar"]:
+        click.echo("Calendars:")
+        for row in summary["by_calendar"]:
+            name = row.get("name") or "loose"
+            calendar_id = row.get("calendar_id") or ""
+            label = f"{name} ({calendar_id})" if calendar_id else name
+            click.echo(f"  {label}: {row['events']} event(s), {row['instances']} instance(s)")
+    if summary["by_month"]:
+        click.echo("Months:")
+        for row in summary["by_month"]:
+            click.echo(f"  {row['month']}: {row['events']} event(s), {row['instances']} instance(s)")
+
+
 def _print_agenda(events, failures, raw, pipe):
+    summary = summarize_agenda(events)
     if machine():
-        emit({"events": events, "failures": failures})
+        emit({"events": events, "failures": failures, "summary": summary})
         return
-    if not machine() and not raw and not pipe and events:
-        click.echo(f"Found {len(events)} event(s) in window:\n")
-    format_output(events, raw=raw, pipe=pipe)
+    if pipe:
+        format_output(events, raw=False, pipe=True)
+    elif raw:
+        format_output({"events": events, "failures": failures, "summary": summary}, raw=True)
+    else:
+        _print_agenda_summary(summary)
+        if events:
+            click.echo(f"\nFound {len(events)} event(s) in window:\n")
+            format_output(events, raw=False, pipe=False)
+        else:
+            click.echo("No events in this window.")
     for failure in failures:
         name = failure.get("event_name") if isinstance(failure, dict) else getattr(failure, "event_name", "")
         message = failure.get("message") if isinstance(failure, dict) else getattr(failure, "message", "")
@@ -1151,7 +1241,16 @@ def _show_window(window, calendar, host, raw, pipe):
             client.get_agenda(start=start_iso, end=end_iso, calendar_ids=calendar_ids)
         )
         if machine():
-            emit({"events": events, "failures": failures, "start": start_iso, "end": end_iso, "window": window})
+            emit(
+                {
+                    "events": events,
+                    "failures": failures,
+                    "start": start_iso,
+                    "end": end_iso,
+                    "window": window,
+                    "summary": summarize_agenda(events),
+                }
+            )
             return
         click.echo(f"{start_iso} .. {end_iso}")
         _print_agenda(events, failures, raw, pipe)
@@ -1296,6 +1395,294 @@ def create(
                 click.echo(f"  Failed:  {ev} — {cr.get('error_message', 'unknown')}")
     except Exception as e:
         handle_api_error(e, "Create event")
+
+
+def _print_warnings(warnings):
+    for warning in warnings or []:
+        message = warning.get("user_message") if isinstance(warning, dict) else getattr(warning, "user_message", "")
+        step = warning.get("next_step") if isinstance(warning, dict) else getattr(warning, "next_step", "")
+        if message:
+            click.echo(f"  {message}")
+        if step:
+            click.echo(f"  {step}")
+
+
+def _scheduled_kwargs_from_flags(title, start, end, all_day, rrule, description, location, timezone, calendar_id):
+    return {
+        "title": title,
+        "start": start,
+        "end": end,
+        "all_day": all_day,
+        "rrule": rrule,
+        "description": description,
+        "location": location,
+        "timezone": timezone or get_default_timezone(),
+        "calendar_id": calendar_id,
+    }
+
+
+@events.command("add")
+@click.option("--title", "-t", default=None, help="Event title")
+@click.option("--start", default=None, help="Start date or time (ISO 8601, or a date when --all-day)")
+@click.option("--end", default=None, help="End date or time. Same day for a timed event.")
+@click.option("--all-day", is_flag=True, help="All-day event. Do not send a clock time.")
+@click.option("--calendar", "-c", default=None, help="Calendar name or ID (defaults to config default)")
+@click.option("--rrule", default=None, help="iCalendar RRULE, such as FREQ=WEEKLY;BYDAY=MO")
+@click.option("--description", "-d", default=None, help="Event description")
+@click.option("--location", default=None, help="Stored as a Location line in the description")
+@click.option("--timezone", "-z", default=None, help="IANA timezone (defaults to config or UTC)")
+@click.option("--file", "events_file", type=click.File("r"), default=None, help="JSON, JSON array, or JSONL. Use - for stdin.")
+@click.option("--host", "-h", help="API host URL")
+def add_event(title, start, end, all_day, calendar, rrule, description, location, timezone, events_file, host):
+    """Create an event from exact fields. Does not use the AI parser.
+
+    With --file, each object uses title, start, end, all_day, calendar, rrule,
+    description, location, and timezone. A JSON array or JSONL file is a batch.
+    """
+    try:
+        if events_file is not None and any([title, start, end, all_day, rrule, description, location]):
+            raise ScheduleError("Pass either --file or the field flags, not both.")
+        timezone = timezone or get_default_timezone()
+        if events_file is not None:
+            records = load_event_records(events_file.read())
+        else:
+            if not title or not start:
+                raise ScheduleError("Pass --title and --start, or --file.")
+            records = None
+        if sys.stdin.isatty() and not confirmed() and not dry_run():
+            count = len(records) if records is not None else 1
+            click.confirm(f"Create {count} event(s)?", abort=True)
+        cached = lookup_idempotency(idempotency_key())
+        if cached is not None and not dry_run():
+            click.echo(cached)
+            return
+        if dry_run():
+            if records is None:
+                body = build_scheduled_event(
+                    title=title,
+                    start=start,
+                    end=end,
+                    all_day=all_day,
+                    rrule=rrule,
+                    description=description,
+                    location=location,
+                    timezone=timezone,
+                )
+                payload = {
+                    "dry_run": True,
+                    "op": "events.add",
+                    "calendar": calendar,
+                    "request": body,
+                }
+            else:
+                bodies = []
+                for index, record in enumerate(records):
+                    try:
+                        fields = record_to_kwargs(
+                            record,
+                            timezone,
+                            calendar or get_default_calendar_id(),
+                        )
+                    except ScheduleError as exc:
+                        raise ScheduleError(f"Event {index + 1}: {exc.user_message}") from exc
+                    fields.pop("calendar_id", None)
+                    bodies.append(build_scheduled_event(**fields))
+                payload = {"dry_run": True, "op": "events.add", "requests": bodies}
+            if machine():
+                emit(payload)
+            else:
+                click.echo("dry-run events add")
+                if records is None:
+                    click.echo(json.dumps(payload["request"], indent=2))
+                else:
+                    click.echo(f"{len(payload['requests'])} event(s)")
+            return
+        if records is None:
+            build_scheduled_event(
+                title=title,
+                start=start,
+                end=end,
+                all_day=all_day,
+                rrule=rrule,
+                description=description,
+                location=location,
+                timezone=timezone,
+            )
+        else:
+            for index, record in enumerate(records):
+                try:
+                    fields = record_to_kwargs(record, timezone, calendar or get_default_calendar_id())
+                except ScheduleError as exc:
+                    raise ScheduleError(f"Event {index + 1}: {exc.user_message}") from exc
+                fields.pop("calendar_id", None)
+                build_scheduled_event(**fields)
+        client = get_client(host)
+        if records is None:
+            calendar_id = resolve_calendar_id(client, calendar)
+            result = client.create_scheduled_event(
+                **_scheduled_kwargs_from_flags(
+                    title, start, end, all_day, rrule, description, location, timezone, calendar_id
+                )
+            )
+            text = _emit_scheduled(result)
+            store_idempotency(idempotency_key(), text)
+            return
+        cache = {}
+        prepared = []
+        for index, record in enumerate(records):
+            if not isinstance(record, dict):
+                raise ScheduleError(f"Event {index + 1}: each event must be a JSON object.")
+            item = dict(record)
+            ref = item.get("calendar_id") or item.get("calendar") or calendar
+            if ref:
+                resolved = cache.get(ref)
+                if resolved is None:
+                    resolved = resolve_calendar_id(client, ref)
+                    cache[ref] = resolved
+                item["calendar_id"] = resolved
+                item.pop("calendar", None)
+            elif get_default_calendar_id():
+                item["calendar_id"] = get_default_calendar_id()
+            if "timezone" not in item:
+                item["timezone"] = timezone
+            prepared.append(item)
+        result = client.create_scheduled_events(prepared, default_timezone=timezone)
+        failed = [row for row in result["results"] if not row.get("ok")]
+        if machine():
+            text = emit(result)
+        else:
+            ok = len(result["results"]) - len(failed)
+            lines = [f"[OK] Created {ok} of {len(result['results'])} event(s)."]
+            for row in result["results"]:
+                if row.get("ok"):
+                    event = row.get("event") or {}
+                    lines.append(f"  {event.get('name') or row.get('title')} ({event.get('id')})")
+                    for warning in row.get("warnings") or []:
+                        message = warning.get("user_message") if isinstance(warning, dict) else ""
+                        if message:
+                            lines.append(f"    {message}")
+                else:
+                    error = row.get("error") or {}
+                    message = error.get("user_message") if isinstance(error, dict) else error
+                    lines.append(f"  Failed: {row.get('title') or row.get('index')} {message}")
+            text = "\n".join(lines)
+            click.echo(text)
+        store_idempotency(idempotency_key(), text)
+        if failed:
+            sys.exit(EXIT_REMOTE)
+    except click.Abort:
+        sys.exit(EXIT_USAGE)
+    except Exception as e:
+        handle_api_error(e, "Add event")
+
+
+def _emit_scheduled(result):
+    if machine():
+        return emit(result)
+    event = result.get("event") or {}
+    name = event.get("name") or event.get("id") or "event"
+    click.echo(f"[OK] Created {name}")
+    if event.get("id"):
+        click.echo(f"  {event['id']}")
+    _print_warnings(result.get("warnings"))
+    return f"[OK] Created {name}"
+
+
+def _imported_ids(result):
+    # `list` is a Click command in this module.
+    data = result.as_dict() if hasattr(result, "as_dict") else result
+    if isinstance(data, dict) and isinstance(data.get("events"), builtins.list):
+        ids = []
+        for item in data["events"]:
+            if not isinstance(item, dict) or item.get("error"):
+                continue
+            event = item.get("event") or {}
+            if isinstance(event, dict) and event.get("id"):
+                ids.append(event["id"])
+        return ids
+    if isinstance(data, dict) and data.get("id"):
+        return [data["id"]]
+    return []
+
+
+@events.command("import")
+@click.argument("path", type=click.Path(exists=True, dir_okay=False))
+@click.option("--name", default=None, help="Name override for the imported events")
+@click.option("--description", "-d", default=None, help="Description added to imported events")
+@click.option("--timezone", "-z", default=None, help="Timezone when the file has no TZID")
+@click.option("--calendar", "-c", default=None, help="Calendar name or ID to link after import")
+@click.option("--host", "-h", help="API host URL")
+def import_ics(path, name, description, timezone, calendar, host):
+    """Create events from an .ics file (POST /events/from-ics)."""
+    try:
+        with click.open_file(path, encoding="utf-8") as handle:
+            ics_content = handle.read()
+    except OSError as exc:
+        fail(
+            ScheduleError(f"Could not read {path}: {exc}"),
+            "Import ICS",
+        )
+    timezone = timezone or get_default_timezone()
+    cached = lookup_idempotency(idempotency_key())
+    if cached is not None and not dry_run():
+        click.echo(cached)
+        return
+    if dry_run():
+        preview = {
+            "dry_run": True,
+            "op": "events.import",
+            "target": path,
+            "bytes": len(ics_content.encode("utf-8")),
+            "endpoint": "/events/from-ics",
+            "name": name,
+            "timezone": timezone,
+            "calendar": calendar,
+        }
+        if machine():
+            emit(preview)
+        else:
+            click.echo(f"dry-run events import {path}")
+        return
+    try:
+        client = get_client(host)
+        result = client.create_event_from_ics(
+            ics_content,
+            name=name,
+            description=description,
+            timezone=timezone,
+        )
+        calendar_id = resolve_calendar_id(client, calendar) if calendar or get_default_calendar_id() else None
+        links = []
+        if calendar_id:
+            for event_id in _imported_ids(result):
+                links.append(client.link_event_to_calendar(calendar_id, event_id))
+        payload = result.as_dict() if hasattr(result, "as_dict") else result
+        if not isinstance(payload, dict):
+            payload = {"result": payload}
+        if links:
+            payload = dict(payload)
+            payload["links"] = [
+                item.as_dict() if hasattr(item, "as_dict") else item for item in links
+            ]
+        if machine():
+            text = emit(payload)
+        else:
+            created = payload.get("successful_imports")
+            failed = payload.get("failed_imports")
+            if created is None:
+                created = len(_imported_ids(result))
+                failed = 0
+            click.echo(f"[OK] Imported {created} event(s), failed {failed}.")
+            for event_id in _imported_ids(result):
+                click.echo(f"  {event_id}")
+            _print_warnings(payload.get("sync_warnings"))
+            for link in links:
+                warnings = link.get("google_export_warnings") if isinstance(link, dict) else getattr(link, "google_export_warnings", None)
+                _print_warnings(warnings)
+            text = f"[OK] Imported {created} event(s), failed {failed}."
+        store_idempotency(idempotency_key(), text)
+    except Exception as e:
+        handle_api_error(e, "Import ICS")
 
 
 @events.command()

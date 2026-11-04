@@ -41,8 +41,11 @@ cli = [
 ]
 
 [project.scripts]
-anymoment = "anymoment.cli.commands:cli"
-am = "anymoment.cli.commands:cli"
+anymoment = "anymoment_entry:main"
+am = "anymoment_entry:main"
+
+[tool.setuptools]
+py-modules = ["anymoment_entry"]
 
 [project.urls]
 Homepage = "https://anymoment.sineways.tech"
