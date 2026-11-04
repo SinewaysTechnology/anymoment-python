@@ -108,7 +108,7 @@ instances = client.get_event_instances(
 
 ## Version 2.1
 
-2.1.0 is the current release. It requires Python 3.10 or newer. Migration notes are in [CHANGELOG.md](CHANGELOG.md).
+2.2.0 is the current release. It requires Python 3.10 or newer. Migration notes are in [CHANGELOG.md](CHANGELOG.md).
 
 Create an API key in AnyMoment settings. The SDK and CLI do not create, rotate, or revoke keys. A key looks like `am_live_`, eight hex characters, an underscore, and a secret. Send it as `Authorization: Bearer`, pass `api_key=` to `Client`, or set `ANYMOMENT_API_KEY`. `--api-key` does the same thing in the CLI. When a key is set, it is used instead of a saved login or `ANYMOMENT_TOKEN`.
 

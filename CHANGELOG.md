@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [2.2.0] - 2026-11-04
 
 ### Structured events
 
@@ -104,6 +104,7 @@ CLI updates for the API at that time, and a stable 1.0 release. Requires Python 
 
 First published SDK and CLI, with calendar and event commands, batch linking and sharing, and the PyPI publish workflow.
 
+[2.2.0]: https://github.com/SinewaysTechnology/anymoment-python/compare/v2.1.0...v2.2.0
 [2.1.0]: https://github.com/SinewaysTechnology/anymoment-python/compare/v2.0.1...v2.1.0
 [2.0.1]: https://github.com/SinewaysTechnology/anymoment-python/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/SinewaysTechnology/anymoment-python/compare/v1.0.0...v2.0.0

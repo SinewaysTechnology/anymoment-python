@@ -27,7 +27,7 @@ from anymoment.exceptions import (
 )
 from anymoment.signatures import verify_signature, verify_webhook, webhook_signature
 
-__version__ = "2.1.0"
+__version__ = "2.2.0"
 __all__ = [
     "Client",
     "AnyMomentException",
