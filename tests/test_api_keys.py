@@ -260,6 +260,9 @@ def test_webhook_signature_is_hmac_of_timestamp_and_raw_body():
     }
     assert verify_signature(payload, secret, signature, timestamp, now=1760000000)
     assert verify_webhook(payload, headers, secret, now=1760000000)
+    assert len(signature) == 64 and all(char in "0123456789abcdef" for char in signature)
+    assert verify_webhook(payload, headers, secret, now=1760000000 + 300)
+    assert not verify_webhook(payload, headers, secret, now=1760000000 + 301)
     assert not verify_signature(payload, secret, signature, timestamp, now=1760000000 + 301)
     assert not verify_signature(b'{"id":"2"}', secret, signature, timestamp, now=1760000000)
     assert not verify_webhook(payload, {"X-AnyMoment-Timestamp": timestamp}, secret, now=1760000000)

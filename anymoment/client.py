@@ -1,7 +1,7 @@
 """API client for AnyMoment SDK."""
 
 import os
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Union
 
 import requests
@@ -20,6 +20,29 @@ from anymoment.exceptions import (
 )
 
 _API_KEY_FAILURES = {"invalid_api_key", "api_key_revoked", "api_key_expired", "auth_failed"}
+
+
+def inclusive_instance_end(value: Any) -> Any:
+    """Include a whole calendar day when end is a date and not a datetime.
+
+    The API reads a date-only end as midnight at the start of that date, so a
+    later occurrence on the same day is omitted. The next day's date is that
+    midnight and includes the requested day. Datetime values are unchanged.
+    """
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, date):
+        return (value + timedelta(days=1)).isoformat()
+    if not isinstance(value, str):
+        return value
+    text = value.strip()
+    if len(text) != 10 or text[4] != "-" or text[7] != "-":
+        return value
+    try:
+        day = date.fromisoformat(text)
+    except ValueError:
+        return value
+    return (day + timedelta(days=1)).isoformat()
 from anymoment.caldav import CalDavClient
 from anymoment.endpoints import EndpointsMixin
 from anymoment.google import GoogleAPI
@@ -606,6 +629,18 @@ class Client(EndpointsMixin):
         location: Optional[str] = None,
         timezone: str = "UTC",
         calendar_id: Optional[str] = None,
+        monthly: Optional[str] = None,
+        interval: int = 1,
+        nth: Optional[int] = None,
+        from_end: Optional[bool] = None,
+        day: Optional[int] = None,
+        roll: Optional[str] = None,
+        country: Optional[str] = None,
+        subdiv: Optional[str] = None,
+        weekend_days: Optional[List[int]] = None,
+        closures: Optional[List[str]] = None,
+        extra_workdays: Optional[List[str]] = None,
+        until: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Create one event from exact fields via POST /events, then link a calendar.
 
@@ -621,11 +656,25 @@ class Client(EndpointsMixin):
             description=description,
             location=location,
             timezone=timezone,
+            monthly=monthly,
+            interval=interval,
+            nth=nth,
+            from_end=from_end,
+            day=day,
+            roll=roll,
+            country=country,
+            subdiv=subdiv,
+            weekend_days=weekend_days,
+            closures=closures,
+            extra_workdays=extra_workdays,
+            until=until,
         )
         created = self.create_event(
             body["name"],
             body["components"],
             description=body.get("description"),
+            roll=body.get("roll"),
+            business_calendar=body.get("business_calendar"),
         )
         event = created.as_dict() if hasattr(created, "as_dict") else dict(created)
         result: Dict[str, Any] = {"event": event, "link": None, "warnings": []}
@@ -746,12 +795,16 @@ class Client(EndpointsMixin):
         to_date: Optional[str] = None,
         optimized: bool = False,
     ) -> List[Dict[str, Any]]:
-        """Get event instances for a date range."""
+        """Get event instances. Query names are start and end, not from and to.
+
+        A date-only end (``YYYY-MM-DD`` or ``datetime.date``) is sent as the
+        next day so that day is included. A datetime is sent unchanged.
+        """
         params = {}
         if from_date is not None:
-            params["from"] = from_date
+            params["start"] = from_date
         if to_date is not None:
-            params["to"] = to_date
+            params["end"] = inclusive_instance_end(to_date)
         if optimized:
             params["optimized"] = True
         return self._request("GET", f"/events/{event_id}/instances", params=params)

@@ -1,0 +1,8 @@
+{
+  "detail": {
+    "message": "Your current subscription does not allow this action. Upgrade your account to Pro to use this functionality.",
+    "required_tier": "pro",
+    "current_tier": null,
+    "upgrade_url": "/subscription/tiers"
+  }
+}

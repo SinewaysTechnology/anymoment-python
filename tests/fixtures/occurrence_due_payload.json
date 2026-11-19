@@ -1,0 +1,15 @@
+{
+  "calendar_id": "550e8400-e29b-41d4-a716-446655440000",
+  "change_type": "occurrence.due",
+  "event": {
+    "description": null,
+    "id": "660e8400-e29b-41d4-a716-446655440001",
+    "is_active": true,
+    "location": null,
+    "name": "Month-end close",
+    "timezone": "Europe/Madrid"
+  },
+  "event_id": "660e8400-e29b-41d4-a716-446655440001",
+  "occurrence_time": "2026-11-30T08:00:00+00:00",
+  "version": 1
+}
