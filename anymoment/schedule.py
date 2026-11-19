@@ -8,6 +8,11 @@ from typing import Any, Optional
 from dateutil import tz as dateutil_tz
 from dateutil.rrule import rrulestr
 
+from anymoment.business import (
+    business_calendar_payload,
+    monthly_config,
+    normalize_roll,
+)
 from anymoment.exceptions import ValidationError
 
 # Integer values for RecurrentEvent.recurrence.
@@ -58,6 +63,18 @@ def build_scheduled_event(
     description: Optional[str] = None,
     location: Optional[str] = None,
     timezone: str = "UTC",
+    monthly: Optional[str] = None,
+    interval: int = 1,
+    nth: Optional[int] = None,
+    from_end: Optional[bool] = None,
+    day: Optional[int] = None,
+    roll: Optional[str] = None,
+    country: Optional[str] = None,
+    subdiv: Optional[str] = None,
+    weekend_days: Optional[list[int]] = None,
+    closures: Optional[list[str]] = None,
+    extra_workdays: Optional[list[str]] = None,
+    until: Optional[str] = None,
 ) -> dict[str, Any]:
     """Return an AdvancedRecurrentEventCreate body.
 
@@ -74,7 +91,21 @@ def build_scheduled_event(
     if end_local is not None and end_local < start_local:
         raise ScheduleError("end is before start.")
 
-    if rrule:
+    if rrule and monthly:
+        raise ScheduleError("Pass either an RRULE or a business-day rule.")
+    if monthly:
+        recurrence, config = _business_month(
+            monthly,
+            start_local,
+            interval=interval,
+            nth=nth,
+            from_end=from_end,
+            day=day,
+            until=until,
+            zone=zone,
+            all_day=all_day,
+        )
+    elif rrule:
         recurrence, config = _rrule_config(rrule, start_local, all_day)
     else:
         recurrence, config = _span_config(start_local, end_local, all_day)
@@ -102,7 +133,55 @@ def build_scheduled_event(
     stored_description = _description(description, location)
     if stored_description is not None:
         body["description"] = stored_description
+    try:
+        roll_value = normalize_roll(roll)
+        calendar_body = business_calendar_payload(
+            country=country,
+            subdiv=subdiv,
+            weekend_days=weekend_days,
+            closures=closures,
+            extra_workdays=extra_workdays,
+        )
+    except ValidationError as exc:
+        raise ScheduleError(exc.user_message) from exc
+    if roll_value != "none":
+        body["roll"] = roll_value
+    if calendar_body is not None:
+        body["business_calendar"] = calendar_body
     return body
+
+
+def _business_month(
+    monthly: str,
+    start_local: datetime,
+    *,
+    interval: int,
+    nth: Optional[int],
+    from_end: Optional[bool],
+    day: Optional[int],
+    until: Optional[str],
+    zone: Any,
+    all_day: bool,
+) -> tuple[int, dict[str, Any]]:
+    range_end = None
+    if until:
+        until_local = _as_local(until, zone, all_day)
+        if all_day:
+            until_local = until_local.replace(hour=23, minute=59, second=59)
+        range_end = _local_stamp(until_local)
+    try:
+        config = monthly_config(
+            monthly,
+            interval=interval,
+            nth=nth,
+            from_end=from_end,
+            day=day,
+            range_start=_local_stamp(start_local),
+            range_end=range_end,
+        )
+    except ValidationError as exc:
+        raise ScheduleError(exc.user_message) from exc
+    return MONTHLY, config
 
 
 def record_to_kwargs(
@@ -122,6 +201,7 @@ def record_to_kwargs(
         raise ScheduleError("all_day must be true or false.")
     calendar = record.get("calendar_id", record.get("calendar", default_calendar_id))
     timezone = record.get("timezone") or default_timezone or "UTC"
+    weekend = record.get("weekend_days", record.get("weekend"))
     return {
         "title": title,
         "start": start,
@@ -132,6 +212,18 @@ def record_to_kwargs(
         "location": record.get("location"),
         "timezone": timezone,
         "calendar_id": calendar or None,
+        "monthly": record.get("monthly", record.get("business_day")),
+        "interval": 1 if record.get("interval") in (None, "") else record.get("interval"),
+        "nth": record.get("nth", record.get("n")),
+        "from_end": record.get("from_end"),
+        "day": record.get("day"),
+        "roll": record.get("roll"),
+        "country": record.get("country"),
+        "subdiv": record.get("subdiv"),
+        "weekend_days": weekend,
+        "closures": record.get("closures"),
+        "extra_workdays": record.get("extra_workdays", record.get("workdays")),
+        "until": record.get("until"),
     }
 
 

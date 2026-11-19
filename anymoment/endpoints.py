@@ -3,6 +3,7 @@
 from typing import Any, Optional
 
 from anymoment.models import mutation_result
+from anymoment.webhooks import normalize_event_types, normalize_offset, normalize_secret
 
 
 def _omit_none(data: dict[str, Any]) -> dict[str, Any]:
@@ -105,9 +106,24 @@ class EndpointsMixin:
         name: str,
         components: list,
         description: Optional[str] = None,
+        roll: Optional[str] = None,
+        business_calendar: Optional[dict] = None,
     ) -> Any:
-        """Create an event from structured recurrence components."""
-        data = _omit_none({"name": name, "components": components, "description": description})
+        """Create an event from structured recurrence components.
+
+        roll is none, forward, backward, nearest, or skip.
+        business_calendar is the holiday calendar: country, subdiv, weekend_days,
+        closures, and extra_workdays.
+        """
+        data = _omit_none(
+            {
+                "name": name,
+                "components": components,
+                "description": description,
+                "roll": roll,
+                "business_calendar": business_calendar,
+            }
+        )
         return mutation_result(self._request("POST", "/events", json_data=data))
 
     def get_events_batch(
@@ -313,7 +329,18 @@ class EndpointsMixin:
         secret: Optional[str] = None,
         occurrence_offset_seconds: Optional[int] = None,
     ) -> Any:
-        """Create a subscription. A generated secret is returned once."""
+        """Create a subscription. A generated secret is returned once.
+
+        event_types are event.created, event.updated, event.deleted, and
+        occurrence.due. occurrence.due is sent at the occurrence time plus
+        occurrence_offset_seconds (within 7 days). A caller-supplied secret
+        must be 16 to 256 characters and is not returned.
+        """
+        event_types = normalize_event_types(event_types)
+        if occurrence_offset_seconds is not None:
+            occurrence_offset_seconds = normalize_offset(occurrence_offset_seconds)
+        if secret is not None:
+            secret = normalize_secret(secret)
         data = _omit_none(
             {
                 "url": url,
@@ -346,6 +373,12 @@ class EndpointsMixin:
         is_active: Optional[bool] = None,
     ) -> Any:
         """Update a subscription. A replacement secret is stored and not returned."""
+        if event_types is not None:
+            event_types = normalize_event_types(event_types)
+        if occurrence_offset_seconds is not None:
+            occurrence_offset_seconds = normalize_offset(occurrence_offset_seconds)
+        if secret is not None:
+            secret = normalize_secret(secret)
         data = _omit_none(
             {
                 "url": url,

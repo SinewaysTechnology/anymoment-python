@@ -1,0 +1,10 @@
+{
+  "detail": [
+    {
+      "type": "missing",
+      "loc": ["header", "x-auth-token"],
+      "msg": "Field required",
+      "input": null
+    }
+  ]
+}

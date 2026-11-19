@@ -606,6 +606,18 @@ class Client(EndpointsMixin):
         location: Optional[str] = None,
         timezone: str = "UTC",
         calendar_id: Optional[str] = None,
+        monthly: Optional[str] = None,
+        interval: int = 1,
+        nth: Optional[int] = None,
+        from_end: Optional[bool] = None,
+        day: Optional[int] = None,
+        roll: Optional[str] = None,
+        country: Optional[str] = None,
+        subdiv: Optional[str] = None,
+        weekend_days: Optional[List[int]] = None,
+        closures: Optional[List[str]] = None,
+        extra_workdays: Optional[List[str]] = None,
+        until: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Create one event from exact fields via POST /events, then link a calendar.
 
@@ -621,11 +633,25 @@ class Client(EndpointsMixin):
             description=description,
             location=location,
             timezone=timezone,
+            monthly=monthly,
+            interval=interval,
+            nth=nth,
+            from_end=from_end,
+            day=day,
+            roll=roll,
+            country=country,
+            subdiv=subdiv,
+            weekend_days=weekend_days,
+            closures=closures,
+            extra_workdays=extra_workdays,
+            until=until,
         )
         created = self.create_event(
             body["name"],
             body["components"],
             description=body.get("description"),
+            roll=body.get("roll"),
+            business_calendar=body.get("business_calendar"),
         )
         event = created.as_dict() if hasattr(created, "as_dict") else dict(created)
         result: Dict[str, Any] = {"event": event, "link": None, "warnings": []}
@@ -746,12 +772,12 @@ class Client(EndpointsMixin):
         to_date: Optional[str] = None,
         optimized: bool = False,
     ) -> List[Dict[str, Any]]:
-        """Get event instances for a date range."""
+        """Get event instances. Query names are start and end, not from and to."""
         params = {}
         if from_date is not None:
-            params["from"] = from_date
+            params["start"] = from_date
         if to_date is not None:
-            params["to"] = to_date
+            params["end"] = to_date
         if optimized:
             params["optimized"] = True
         return self._request("GET", f"/events/{event_id}/instances", params=params)

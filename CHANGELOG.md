@@ -1,5 +1,31 @@
 # Changelog
 
+## [2.3.0] - 2026-11-19
+
+### Business days
+
+- `POST /events` can send `roll` (`none`, `forward`, `backward`, `nearest`, `skip`) and `business_calendar` (`country`, `subdiv`, `weekend_days`, `closures`, `extra_workdays`).
+- A monthly component can use `last_business_day` or `nth_business_day` (`n`, `from_end`). The component `timezone` is the clock.
+- `am events add` accepts `--business-day`, `--nth`, `--from-end`, `--day`, `--roll`, `--country`, `--subdiv`, `--weekend`, `--closure`, `--workday`, `--interval`, and `--until`.
+- `am events business-days` previews the dates locally. It does not call the API. Holiday dates come from `holidays` 0.57, the version pinned by the API. `GET /events/{id}/instances` still needs a token or an API key.
+- `Client.create_event` and `create_scheduled_event` send top-level `roll` and `business_calendar`.
+- `get_event_instances` sends `start` and `end`. CLI `--from` and `--to` are those query names. The old `from` and `to` query names are not in the API.
+
+### Webhooks
+
+- Event types are `event.created`, `event.updated`, `event.deleted`, and `occurrence.due`. Unknown types, a secret outside 16 to 256 characters, and an offset outside 7 days are rejected before the request.
+- `build_webhook_payload`, `canonical_webhook_body`, and `parse_webhook_payload` cover the version 1 body. `verify_webhook` checks hex HMAC-SHA256 of `{timestamp}.{raw body}` and a 300 second window.
+- CLI list and create print `paused_reason`. `subscription_required` means deliveries stay paused until the account has Pro or an active trial.
+
+### Auth
+
+- HTTP 402, and HTTP 403 with `required_tier` or code `subscription_required`, raise `SubscriptionRequiredError`.
+- HTTP 422 with a missing `x-auth-token` raises `AuthenticationError`. A bad API key is still HTTP 401 `invalid_api_key`.
+
+### PyPI
+
+- PyPI was 2.1.0 when this release was prepared. 2.2.0 was on `main` and had not been published. This change does not publish.
+
 ## [2.2.0] - 2026-11-04
 
 ### Structured events
@@ -104,6 +130,7 @@ CLI updates for the API at that time, and a stable 1.0 release. Requires Python 
 
 First published SDK and CLI, with calendar and event commands, batch linking and sharing, and the PyPI publish workflow.
 
+[2.3.0]: https://github.com/SinewaysTechnology/anymoment-python/compare/v2.2.0...v2.3.0
 [2.2.0]: https://github.com/SinewaysTechnology/anymoment-python/compare/v2.1.0...v2.2.0
 [2.1.0]: https://github.com/SinewaysTechnology/anymoment-python/compare/v2.0.1...v2.1.0
 [2.0.1]: https://github.com/SinewaysTechnology/anymoment-python/compare/v2.0.0...v2.0.1

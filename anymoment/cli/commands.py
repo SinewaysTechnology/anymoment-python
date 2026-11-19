@@ -34,6 +34,7 @@ from anymoment.config import (
     get_default_timezone,
     set_config,
 )
+from anymoment.business import preview_occurrences
 from anymoment.dates import DateParseError, resolve_window
 from anymoment.exceptions import AuthenticationError
 from anymoment.schedule import (
@@ -43,6 +44,7 @@ from anymoment.schedule import (
     record_to_kwargs,
     summarize_agenda,
 )
+from anymoment.webhooks import CHANGE_TYPES
 from anymoment.token_manager import (
     clear_all_tokens,
     delete_token,
@@ -855,6 +857,8 @@ def list_subscriptions(calendar_id, host, raw):
             types = ", ".join(row.get("event_types") or [])
             click.echo(f"  {row.get('url')} [{active}]")
             click.echo(f"    {row.get('id')}  {types}")
+            if row.get("paused_reason"):
+                click.echo(f"    paused: {row['paused_reason']}")
     except Exception as e:
         handle_api_error(e, "List subscriptions")
 
@@ -862,13 +866,25 @@ def list_subscriptions(calendar_id, host, raw):
 @subscriptions.command("create")
 @click.argument("calendar_id")
 @click.option("--url", required=True, help="HTTPS endpoint that receives deliveries")
-@click.option("--event-type", "event_types", multiple=True, required=True, help="Change type to deliver. Repeat for more than one.")
-@click.option("--secret", default=None, help="Signing secret. Omit to let AnyMoment generate one.")
-@click.option("--offset-seconds", type=int, default=None, help="Seconds before (negative) or after an occurrence")
+@click.option(
+    "--event-type",
+    "event_types",
+    multiple=True,
+    required=True,
+    help="Change type: event.created, event.updated, event.deleted, or occurrence.due. Repeat to send more than one.",
+)
+@click.option("--secret", default=None, help="Signing secret, 16 to 256 characters. Omit to let AnyMoment generate one.")
+@click.option("--offset-seconds", type=int, default=None, help="Seconds before (negative) or after occurrence.due. Limit is 7 days.")
 @click.option("--host", "-h", help="API host URL")
 @click.option("--raw", is_flag=True, help="Output full JSON")
 def create_subscription(calendar_id, url, event_types, secret, offset_seconds, host, raw):
-    """Create a subscription. A generated secret is shown once."""
+    """Create a subscription. A generated secret is shown once.
+
+    occurrence.due fires at the occurrence time plus --offset-seconds.
+    event.created, event.updated, and event.deleted fire when the event changes.
+    If the account is not on Pro or an active trial, the subscription is saved
+    and paused_reason is subscription_required. Deliveries stay paused.
+    """
     try:
         if _replay_or_dry_run("create-subscription", url):
             return
@@ -886,6 +902,10 @@ def create_subscription(calendar_id, url, event_types, secret, offset_seconds, h
                 click.echo("[OK] Subscription created. Your signing secret was stored and is not shown again.\n")
             else:
                 click.echo("[OK] Subscription created. The generated signing secret is below. Store it now. It is not shown again.\n")
+            if isinstance(result, dict) and result.get("paused_reason"):
+                click.echo(
+                    f"paused: {result['paused_reason']}. Deliveries stay paused until the account has Pro or an active trial.\n"
+                )
         format_output(result, raw=raw)
     except Exception as e:
         handle_api_error(e, "Create subscription")
@@ -911,7 +931,12 @@ def get_subscription(calendar_id, subscription_id, host, raw):
 @click.argument("calendar_id")
 @click.argument("subscription_id")
 @click.option("--url", default=None, help="New endpoint URL")
-@click.option("--event-type", "event_types", multiple=True, help="Replace change types. Repeat for more than one.")
+@click.option(
+    "--event-type",
+    "event_types",
+    multiple=True,
+    help="Replace change types. One of event.created, event.updated, event.deleted, occurrence.due. Repeat for more than one.",
+)
 @click.option("--secret", default=None, help="Replacement signing secret. It is not shown again.")
 @click.option("--offset-seconds", type=int, default=None, help="Seconds before (negative) or after an occurrence")
 @click.option("--active/--inactive", default=None, help="Turn delivery on or off")
@@ -992,6 +1017,8 @@ def subscription_deliveries(calendar_id, subscription_id, limit, host, raw):
         for row in rows:
             when = row.get("created_at") or ""
             click.echo(f"  {row.get('status')}  {row.get('change_type')}  {when}")
+            if row.get("occurrence_time"):
+                click.echo(f"    occurrence {row.get('occurrence_time')}")
             click.echo(f"    {row.get('id')}")
     except Exception as e:
         handle_api_error(e, "List deliveries")
@@ -1407,7 +1434,29 @@ def _print_warnings(warnings):
             click.echo(f"  {step}")
 
 
-def _scheduled_kwargs_from_flags(title, start, end, all_day, rrule, description, location, timezone, calendar_id):
+def _scheduled_kwargs_from_flags(
+    title,
+    start,
+    end,
+    all_day,
+    rrule,
+    description,
+    location,
+    timezone,
+    calendar_id,
+    business_day=None,
+    interval=1,
+    nth=None,
+    from_end=False,
+    day=None,
+    roll=None,
+    country=None,
+    subdiv=None,
+    weekend=None,
+    closure=(),
+    workday=(),
+    until=None,
+):
     return {
         "title": title,
         "start": start,
@@ -1418,7 +1467,25 @@ def _scheduled_kwargs_from_flags(title, start, end, all_day, rrule, description,
         "location": location,
         "timezone": timezone or get_default_timezone(),
         "calendar_id": calendar_id,
+        "monthly": business_day,
+        "interval": 1 if interval is None else interval,
+        "nth": nth,
+        "from_end": from_end,
+        "day": day,
+        "roll": roll,
+        "country": country,
+        "subdiv": subdiv,
+        "weekend_days": weekend,
+        "closures": builtins.list(closure) or None,
+        "extra_workdays": builtins.list(workday) or None,
+        "until": until,
     }
+
+
+def _add_request(**flags):
+    fields = _scheduled_kwargs_from_flags(**flags)
+    fields.pop("calendar_id", None)
+    return build_scheduled_event(**fields)
 
 
 @events.command("add")
@@ -1428,19 +1495,94 @@ def _scheduled_kwargs_from_flags(title, start, end, all_day, rrule, description,
 @click.option("--all-day", is_flag=True, help="All-day event. Do not send a clock time.")
 @click.option("--calendar", "-c", default=None, help="Calendar name or ID (defaults to config default)")
 @click.option("--rrule", default=None, help="iCalendar RRULE, such as FREQ=WEEKLY;BYDAY=MO")
+@click.option(
+    "--business-day",
+    default=None,
+    type=click.Choice(["last", "first", "nth", "day"], case_sensitive=False),
+    help="Monthly rule: last, first, nth, or day. Sent as last_business_day, nth_business_day, or day_of_month.",
+)
+@click.option("--nth", type=int, default=None, help="Which business day. 1 is the first. Use with --business-day nth.")
+@click.option("--from-end", is_flag=True, help="Count --nth from the end of the month.")
+@click.option("--day", type=int, default=None, help="Day of the month, 1-31. Use with --business-day day.")
+@click.option(
+    "--roll",
+    default=None,
+    type=click.Choice(["none", "forward", "backward", "nearest", "skip"], case_sensitive=False),
+    help="Move a non-business day forward, backward, or to the nearest business day, or drop it.",
+)
+@click.option("--country", default=None, help="ISO country code for holidays, such as ES.")
+@click.option("--subdiv", default=None, help="Holiday subdivision, such as MD or ENG.")
+@click.option("--weekend", default=None, help="Days off, 0=Monday through 6=Sunday. Example: 5,6 or 4,5.")
+@click.option("--closure", multiple=True, help="Extra day off, YYYY-MM-DD. Repeat for more than one.")
+@click.option("--workday", multiple=True, help="Working date that overrides a weekend, holiday, or closure.")
+@click.option("--interval", type=int, default=1, help="Every N months for a business-day rule.")
+@click.option("--until", default=None, help="Inclusive last date for the rule, YYYY-MM-DD.")
 @click.option("--description", "-d", default=None, help="Event description")
 @click.option("--location", default=None, help="Stored as a Location line in the description")
 @click.option("--timezone", "-z", default=None, help="IANA timezone (defaults to config or UTC)")
 @click.option("--file", "events_file", type=click.File("r"), default=None, help="JSON, JSON array, or JSONL. Use - for stdin.")
 @click.option("--host", "-h", help="API host URL")
-def add_event(title, start, end, all_day, calendar, rrule, description, location, timezone, events_file, host):
+def add_event(
+    title,
+    start,
+    end,
+    all_day,
+    calendar,
+    rrule,
+    business_day,
+    nth,
+    from_end,
+    day,
+    roll,
+    country,
+    subdiv,
+    weekend,
+    closure,
+    workday,
+    interval,
+    until,
+    description,
+    location,
+    timezone,
+    events_file,
+    host,
+):
     """Create an event from exact fields. Does not use the AI parser.
 
     With --file, each object uses title, start, end, all_day, calendar, rrule,
-    description, location, and timezone. A JSON array or JSONL file is a batch.
+    description, location, timezone, monthly, nth, from_end, day, roll, country,
+    subdiv, weekend_days, closures, extra_workdays, interval, and until.
+    A JSON array or JSONL file is a batch.
+
+    --business-day last with --country ES is the last business day of the month
+    on the Spain holiday calendar. The clock and timezone come from --start and
+    --timezone. --roll moves a fixed day off weekends and holidays.
     """
     try:
-        if events_file is not None and any([title, start, end, all_day, rrule, description, location]):
+        field_flags = any(
+            [
+                title,
+                start,
+                end,
+                all_day,
+                rrule,
+                description,
+                location,
+                business_day,
+                nth,
+                from_end,
+                day,
+                roll,
+                country,
+                subdiv,
+                weekend,
+                closure,
+                workday,
+                until,
+                interval not in (None, 1),
+            ]
+        )
+        if events_file is not None and field_flags:
             raise ScheduleError("Pass either --file or the field flags, not both.")
         timezone = timezone or get_default_timezone()
         if events_file is not None:
@@ -1456,18 +1598,31 @@ def add_event(title, start, end, all_day, calendar, rrule, description, location
         if cached is not None and not dry_run():
             click.echo(cached)
             return
+        add_flags = dict(
+            title=title,
+            start=start,
+            end=end,
+            all_day=all_day,
+            rrule=rrule,
+            description=description,
+            location=location,
+            timezone=timezone,
+            business_day=business_day,
+            interval=interval,
+            nth=nth,
+            from_end=from_end,
+            day=day,
+            roll=roll,
+            country=country,
+            subdiv=subdiv,
+            weekend=weekend,
+            closure=closure,
+            workday=workday,
+            until=until,
+        )
         if dry_run():
             if records is None:
-                body = build_scheduled_event(
-                    title=title,
-                    start=start,
-                    end=end,
-                    all_day=all_day,
-                    rrule=rrule,
-                    description=description,
-                    location=location,
-                    timezone=timezone,
-                )
+                body = _add_request(calendar_id=calendar, **add_flags)
                 payload = {
                     "dry_run": True,
                     "op": "events.add",
@@ -1498,16 +1653,7 @@ def add_event(title, start, end, all_day, calendar, rrule, description, location
                     click.echo(f"{len(payload['requests'])} event(s)")
             return
         if records is None:
-            build_scheduled_event(
-                title=title,
-                start=start,
-                end=end,
-                all_day=all_day,
-                rrule=rrule,
-                description=description,
-                location=location,
-                timezone=timezone,
-            )
+            _add_request(calendar_id=None, **add_flags)
         else:
             for index, record in enumerate(records):
                 try:
@@ -1520,9 +1666,7 @@ def add_event(title, start, end, all_day, calendar, rrule, description, location
         if records is None:
             calendar_id = resolve_calendar_id(client, calendar)
             result = client.create_scheduled_event(
-                **_scheduled_kwargs_from_flags(
-                    title, start, end, all_day, rrule, description, location, timezone, calendar_id
-                )
+                **_scheduled_kwargs_from_flags(calendar_id=calendar_id, **add_flags)
             )
             text = _emit_scheduled(result)
             store_idempotency(idempotency_key(), text)
@@ -1603,6 +1747,103 @@ def _imported_ids(result):
     if isinstance(data, dict) and data.get("id"):
         return [data["id"]]
     return []
+
+
+def _print_business_days(preview: dict[str, Any]) -> None:
+    country = preview.get("country") or "no holiday country"
+    subdiv = f"/{preview['subdiv']}" if preview.get("subdiv") else ""
+    clock = preview.get("time") or "all day"
+    click.echo(f"{preview['label']}, {country}{subdiv}")
+    click.echo(
+        f"Timezone: {preview['timezone']}  Time: {clock}  Roll: {preview['roll']}  "
+        f"Weekends: {','.join(str(day) for day in preview['weekend_days'])}"
+    )
+    click.echo("Local preview. It does not call the API.")
+    if not preview["occurrences"]:
+        click.echo("No dates in that window.")
+        return
+    for row in preview["occurrences"]:
+        when = row.get("utc_start")
+        suffix = f"  {row['local_start']}  {when}" if when else ""
+        click.echo(f"  {row['date']}  {row['weekday']}{suffix}")
+
+
+@events.command("business-days")
+@click.option(
+    "--rule",
+    required=True,
+    type=click.Choice(["last", "first", "nth", "day"], case_sensitive=False),
+    help="last, first, nth, or day of the month.",
+)
+@click.option("--from", "window_from", required=True, help="First date to include, YYYY-MM-DD.")
+@click.option("--to", "window_to", required=True, help="Last date to include, YYYY-MM-DD.")
+@click.option("--time", "at", default=None, help="Clock time HH:MM in --timezone.")
+@click.option("--timezone", "-z", default=None, help="IANA timezone (defaults to config or UTC)")
+@click.option("--nth", type=int, default=None, help="Which business day. 1 is the first.")
+@click.option("--from-end", is_flag=True, help="Count --nth from the end of the month.")
+@click.option("--day", type=int, default=None, help="Day of the month for --rule day.")
+@click.option(
+    "--roll",
+    default="none",
+    type=click.Choice(["none", "forward", "backward", "nearest", "skip"], case_sensitive=False),
+    help="Move a non-business day. A last or nth business day is already a working day.",
+)
+@click.option("--country", default=None, help="ISO country code, such as ES for Spain.")
+@click.option("--subdiv", default=None, help="Holiday subdivision, such as MD or ENG.")
+@click.option("--weekend", default=None, help="Days off, 0=Monday through 6=Sunday. Default is 5,6.")
+@click.option("--closure", multiple=True, help="Extra day off, YYYY-MM-DD.")
+@click.option("--workday", multiple=True, help="Working date that overrides a weekend, holiday, or closure.")
+@click.option("--interval", type=int, default=1, help="Every N months.")
+def business_days(
+    rule,
+    window_from,
+    window_to,
+    at,
+    timezone,
+    nth,
+    from_end,
+    day,
+    roll,
+    country,
+    subdiv,
+    weekend,
+    closure,
+    workday,
+    interval,
+):
+    """Preview last, first, or nth business days. Does not call the API.
+
+    Spain holidays, last business day, 09:00 Madrid:
+
+      am events business-days --rule last --country ES --timezone Europe/Madrid --time 09:00 --from 2026-01-01 --to 2026-06-30
+
+    Holiday dates come from the holidays package (0.57, the version the API pins).
+    Comparing the saved event with GET /events/{id}/instances needs a token or an API key.
+    """
+    try:
+        preview = preview_occurrences(
+            rule,
+            start=window_from,
+            end=window_to,
+            timezone=timezone or get_default_timezone(),
+            at=at,
+            interval=interval,
+            nth=nth,
+            from_end=from_end,
+            day=day,
+            roll=roll,
+            country=country,
+            subdiv=subdiv,
+            weekend_days=weekend,
+            closures=builtins.list(closure) or None,
+            extra_workdays=builtins.list(workday) or None,
+        )
+        if machine():
+            emit(preview)
+            return
+        _print_business_days(preview)
+    except Exception as e:
+        handle_api_error(e, "Business days")
 
 
 @events.command("import")
@@ -1809,13 +2050,13 @@ def toggle(event_id, host, raw):
 
 @events.command()
 @click.argument("event_id")
-@click.option("--from", "from_date", help="Start date")
-@click.option("--to", "to_date", help="End date")
+@click.option("--from", "from_date", help="Window start. Sent as the start query parameter.")
+@click.option("--to", "to_date", help="Window end. Sent as the end query parameter.")
 @click.option("--optimized", is_flag=True, help="Return optimized format")
 @click.option("--host", "-h", help="API host URL")
 @click.option("--raw", is_flag=True, help="Output full JSON")
 def instances(event_id, from_date, to_date, optimized, host, raw):
-    """Get event instances for a date range."""
+    """Get event instances. --from and --to are the start and end query parameters."""
     try:
         client = get_client(host)
         instances = client.get_event_instances(
@@ -1851,8 +2092,8 @@ def next(event_id, host, raw):
 @events.command()
 @click.argument("event_id")
 @click.option("--format", "format_type", type=click.Choice(["ics", "csv"]), default="ics", help="Export format")
-@click.option("--from", "from_date", help="Start date")
-@click.option("--to", "to_date", help="End date")
+@click.option("--from", "from_date", help="Window start. Sent as the start query parameter.")
+@click.option("--to", "to_date", help="Window end. Sent as the end query parameter.")
 @click.option("--out", "output_file", help="Output file path")
 @click.option("--host", "-h", help="API host URL")
 def export(event_id, format_type, from_date, to_date, output_file, host):

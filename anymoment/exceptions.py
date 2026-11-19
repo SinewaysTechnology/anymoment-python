@@ -153,6 +153,15 @@ class CalendarNotAllowedError(PermissionDeniedError):
     """403 calendar_not_allowed. The key is not allowed to use this calendar."""
 
 
+class SubscriptionRequiredError(PermissionDeniedError):
+    """The account needs Pro or an active trial.
+
+    The live API returns 403 with required_tier for a hard gate. Outgoing
+    webhook create still succeeds and sets paused_reason to
+    subscription_required. HTTP 402 is accepted if a response uses it.
+    """
+
+
 # Shown when the API body has no next_step of its own.
 API_KEY_NEXT_STEPS = {
     "invalid_api_key": (
@@ -181,6 +190,14 @@ API_KEY_ERROR_TYPES = {
     "api_key_not_permitted": (ApiKeyNotPermittedError, {403}),
     "calendar_not_allowed": (CalendarNotAllowedError, {403}),
 }
+
+SUBSCRIPTION_REQUIRED = "subscription_required"
+
+SUBSCRIPTION_NEXT_STEP = (
+    "This action needs Pro or an active trial. "
+    "Outgoing webhook subscriptions can still be saved. "
+    "When deliveries are paused, paused_reason is subscription_required."
+)
 
 CALENDAR_LIMITED_EVENTS_NEXT_STEP = (
     "GET /events is not available for a calendar-limited key. "
@@ -348,6 +365,51 @@ def _looks_like_traceback(text: str) -> bool:
     return "Traceback" in text and 'File "' in text
 
 
+def _detail_object(parsed: ParsedError) -> dict:
+    details = parsed.details if isinstance(parsed.details, dict) else {}
+    detail = details.get("detail")
+    if isinstance(detail, dict):
+        return detail
+    return details
+
+
+_AUTH_HEADER_NAMES = {"x-auth-token", "authorization"}
+
+
+def _missing_session_header(parsed: ParsedError) -> bool:
+    """True when every 422 item is a missing auth header.
+
+    A body that also rejects other fields stays a validation error.
+    """
+    details = parsed.details if isinstance(parsed.details, dict) else {}
+    detail = details.get("detail")
+    if not isinstance(detail, list) or not detail:
+        return False
+    saw_auth = False
+    for item in detail:
+        if not isinstance(item, dict):
+            return False
+        loc = item.get("loc") or []
+        if not isinstance(loc, (list, tuple)) or not loc:
+            return False
+        if item.get("type") == "missing" and str(loc[-1]) in _AUTH_HEADER_NAMES:
+            saw_auth = True
+            continue
+        return False
+    return saw_auth
+
+
+def _subscription_gate(status_code: int, parsed: ParsedError) -> bool:
+    if status_code == 402:
+        return True
+    if status_code != 403:
+        return False
+    if parsed.code == SUBSCRIPTION_REQUIRED:
+        return True
+    detail = _detail_object(parsed)
+    return bool(detail.get("required_tier"))
+
+
 def exception_for_status(status_code: int, parsed: ParsedError) -> AnyMomentException:
     """Map an HTTP status and a parsed body onto a typed error."""
     next_step = parsed.next_step
@@ -378,6 +440,18 @@ def exception_for_status(status_code: int, parsed: ParsedError) -> AnyMomentExce
             )
         kwargs["user_message"] = user_message
         kwargs["next_step"] = next_step
+    if status_code == 422 and _missing_session_header(parsed):
+        kwargs["next_step"] = (
+            "Sign in with `am auth login`, or set ANYMOMENT_TOKEN or ANYMOMENT_API_KEY. "
+            "A session uses the x-auth-token header. An API key uses Authorization: Bearer."
+        )
+        return AuthenticationError(message, status_code=status_code, **kwargs)
+    if _subscription_gate(status_code, parsed):
+        if kwargs.get("next_step") is None:
+            kwargs["next_step"] = SUBSCRIPTION_NEXT_STEP
+        if kwargs.get("code") is None:
+            kwargs["code"] = SUBSCRIPTION_REQUIRED
+        return SubscriptionRequiredError(message, status_code=status_code, **kwargs)
     if (
         status_code == 401
         and parsed.plain

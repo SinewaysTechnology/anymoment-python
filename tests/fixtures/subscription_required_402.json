@@ -1,0 +1,6 @@
+{
+  "detail": {
+    "code": "subscription_required",
+    "message": "Outgoing webhooks need Pro or an active trial."
+  }
+}

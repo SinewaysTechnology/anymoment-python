@@ -2,7 +2,7 @@
 
 Python SDK and command-line interface for the [AnyMoment API](https://api.anymoment.sineways.tech) - Create and manage recurring calendar events with natural language.
 
-**📖 [Full documentation (Python SDK & CLI)](https://anymoment.sineways.tech/anymoment-python/docs)**: installation, quick start, all CLI commands, and Library API reference.
+**📖 [Full documentation (Python SDK & CLI)](https://anymoment.sineways.tech/anymoment-python/docs?ref=pypi-readme)**: installation, quick start, all CLI commands, and Library API reference.
 
 ## Features
 
@@ -71,7 +71,7 @@ anymoment events create "Weekly team meeting every Monday at 10 AM" \
 # List events
 anymoment events list --calendar <calendar-id>
 
-# Get event instances for a date range
+# Get event instances. --from and --to are sent as start and end.
 anymoment events instances <event-id> --from "2026-01-01" --to "2026-03-31"
 ```
 
@@ -106,9 +106,32 @@ instances = client.get_event_instances(
 )
 ```
 
+## Version 2.3
+
+2.3.0 is the current release. It requires Python 3.10 or newer. Migration notes are in [CHANGELOG.md](CHANGELOG.md).
+
+Business-day rules are fields on `POST /events`. `roll` is `none`, `forward`, `backward`, `nearest`, or `skip`. `business_calendar` takes `country`, `subdiv`, `weekend_days` (0 is Monday through 6 is Sunday), `closures`, and `extra_workdays`. A monthly component uses `type` `last_business_day` or `nth_business_day` (`n` and `from_end`). The clock uses the component `timezone`.
+
+`am events business-days` previews those dates on this machine. It does not call the API. Holiday dates come from the `holidays` package at 0.57, the version the API pins. `GET /events/{id}/instances` is the production expansion and needs a token or an API key.
+
+```bash
+am events business-days --rule last --country ES --timezone Europe/Madrid \
+  --time 09:00 --from 2026-01-01 --to 2026-06-30
+am events add --title "Month-end" --start 2026-01-30T09:00:00 \
+  --timezone Europe/Madrid --business-day last --country ES
+```
+
+Outgoing subscriptions accept `event.created`, `event.updated`, `event.deleted`, and `occurrence.due`. A generated signing secret is returned once. `occurrence.due` is sent at the occurrence time plus `occurrence_offset_seconds` (within 7 days). The version 1 body is canonical JSON with sorted keys: `version`, `event_id`, `calendar_id`, `change_type`, `event`, and `occurrence_time`. `verify_webhook` checks hex HMAC-SHA256 of `{timestamp}.{raw body}` and rejects a timestamp more than 300 seconds off.
+
+`am events instances --from` and `--to` are the `start` and `end` query parameters on `GET /events/{id}/instances`.
+
+If the account is not on Pro or an active trial, creating a subscription still succeeds and `paused_reason` is `subscription_required`. Deliveries stay paused. A hard gate is HTTP 403 with `required_tier`, mapped to `SubscriptionRequiredError`. HTTP 402 with code `subscription_required` is mapped the same way. The OpenAPI document does not declare 402. A call with no credential is HTTP 422 because `x-auth-token` is missing. A bad API key is HTTP 401 `invalid_api_key`.
+
+Create an account at [AnyMoment](https://anymoment.sineways.tech/?ref=pypi-readme).
+
 ## Version 2.1
 
-2.2.0 is the current release. It requires Python 3.10 or newer. Migration notes are in [CHANGELOG.md](CHANGELOG.md).
+2.2.0 added exact-field event create. It requires Python 3.10 or newer. Migration notes are in [CHANGELOG.md](CHANGELOG.md).
 
 Create an API key in AnyMoment settings. The SDK and CLI do not create, rotate, or revoke keys. A key looks like `am_live_`, eight hex characters, an underscore, and a secret. Send it as `Authorization: Bearer`, pass `api_key=` to `Client`, or set `ANYMOMENT_API_KEY`. `--api-key` does the same thing in the CLI. When a key is set, it is used instead of a saved login or `ANYMOMENT_TOKEN`.
 
@@ -137,6 +160,9 @@ Keys can allow `events:read`, `events:write`, `calendars:read`, and `webhooks:ma
 | 401 | `api_key_expired` | The key has expired. Create a new one in settings. |
 | 403 | `api_key_not_permitted` | API keys cannot call sign-in, account, or key-management routes. Use `am auth login` for those. |
 | 403 | `calendar_not_allowed` | The key cannot access that calendar. |
+| 402 | `subscription_required` | This action needs Pro or an active trial. The OpenAPI document does not declare 402. The SDK still maps it. |
+| 403 | `subscription_required` | Same gate, which is the status the API returns today (`required_tier` on the body). Webhook create can instead succeed with `paused_reason`. |
+| 422 | | No credential was sent (`x-auth-token` is missing). Sign in, or set `ANYMOMENT_TOKEN` or `ANYMOMENT_API_KEY`. |
 | 429 | | Wait `retry_after` seconds, then retry. |
 
 Webhook subscriptions live on a calendar: create, read, update, delete, list deliveries, and replay one delivery. A generated signing secret is returned once, on create. Store it. Later responses do not include it.
@@ -294,11 +320,11 @@ anymoment calendars webhook-url <id>
 
 ### Calendar subscriptions
 
-Outgoing webhook subscriptions for one calendar. If you don't pass --secret, AnyMoment generates one and shows it once in the create response. Store it; later responses don't include it.
+Outgoing webhook subscriptions for one calendar. If you don't pass --secret, AnyMoment generates one and shows it once in the create response. Store it; later responses don't include it. `--event-type` is `event.created`, `event.updated`, `event.deleted`, or `occurrence.due`. Repeat the flag to send more than one. `occurrence.due` uses `--offset-seconds` (within 7 days, negative means earlier). When the account is not entitled, the row includes `paused_reason` `subscription_required`.
 
 ```bash
 anymoment calendars subscriptions list <calendar-id>
-anymoment calendars subscriptions create <calendar-id> --url https://example.com/hooks/anymoment --event-type event.updated [--secret SECRET] [--offset-seconds N]
+anymoment calendars subscriptions create <calendar-id> --url https://example.com/hooks/anymoment --event-type occurrence.due --event-type event.created [--secret SECRET] [--offset-seconds N]
 anymoment calendars subscriptions get <calendar-id> <subscription-id>
 anymoment calendars subscriptions update <calendar-id> <subscription-id> [--url URL] [--event-type TYPE] [--secret SECRET] [--offset-seconds N] [--active/--inactive]
 anymoment calendars subscriptions delete <calendar-id> <subscription-id>
@@ -326,6 +352,14 @@ am events add --file events.jsonl --json
 # Import an iCalendar file
 am events import ./calendar.ics --calendar <calendar-id> --json
 
+# Last business day of the month, Spain holidays. Local preview, no API call.
+am events business-days --rule last --country ES --timezone Europe/Madrid \
+  --time 09:00 --from 2026-01-01 --to 2026-06-30
+
+# Same rule as a POST /events body, with the Madrid clock on the component.
+am events add --title "Month-end" --start 2026-01-30T09:00:00 \
+  --business-day last --country ES --timezone Europe/Madrid --calendar <calendar-id>
+
 # List events
 anymoment events list [--calendar ID] [--active/--inactive] [--limit N] [--offset N] [--minimal]
 
@@ -343,7 +377,7 @@ anymoment events delete <id>
 # Toggle event active status
 anymoment events toggle <id>
 
-# Get event instances
+# Get event instances. --from and --to are the start and end query parameters.
 anymoment events instances <id> [--from DATE] [--to DATE] [--optimized]
 
 # Get next instance
@@ -449,7 +483,7 @@ client = Client(
 - `client.update_event(event_id, name=None, description=None)` - Update event
 - `client.delete_event(event_id)` - Delete event
 - `client.toggle_event(event_id)` - Toggle event active status
-- `client.get_event_instances(event_id, from_date=None, to_date=None, optimized=False)` - Get event instances
+- `client.get_event_instances(event_id, from_date=None, to_date=None, optimized=False)` - Get event instances. The query names are `start` and `end`.
 - `client.get_next_event_instance(event_id)` - Get next instance
 
 #### Agenda & Search
@@ -475,7 +509,9 @@ client = Client(
 
 #### Structured events, preview, import, guests, and webhooks
 
-- `client.create_event(name, components, description=None)` - Create an event from recurrence components
+- `client.create_event(name, components, description=None, roll=None, business_calendar=None)` - Create an event from recurrence components
+- `client.create_scheduled_event(..., monthly="last", country="ES", roll="backward")` - Exact fields, including a business-day month
+- `preview_occurrences("last", start=..., end=..., country="ES", timezone="Europe/Madrid", at="09:00")` - Local business-day preview. Does not call the API.
 - `client.get_events_batch(event_ids, ...)` - Fetch many events by id
 - `client.preview_event_from_text(name, recurrence_text, start, end, ...)` - Preview natural language without saving
 - `client.create_event_from_ics(ics_content, ...)` - Create an event from ICS text
@@ -485,6 +521,7 @@ client = Client(
 - `client.list_subscriptions(calendar_id)` / `client.create_subscription(calendar_id, url, event_types, secret=None, occurrence_offset_seconds=None)` / `client.get_subscription(...)` / `client.update_subscription(...)` / `client.delete_subscription(...)` - Calendar webhook subscriptions
 - `client.list_subscription_deliveries(calendar_id, subscription_id, limit=None)` / `client.replay_subscription_delivery(...)` - Delivery log and replay
 - `verify_webhook(payload, headers, secret)` / `verify_signature(...)` / `webhook_signature(...)` - Check `X-AnyMoment-Signature` (HMAC-SHA256 over `{timestamp}.{raw body}`)
+- `build_webhook_payload(...)` / `canonical_webhook_body(payload)` / `parse_webhook_payload(payload)` - Version 1 body. `occurrence.due` sets `occurrence_time`. The signed bytes are sorted compact JSON.
 
 #### Instances, export, and changes
 
@@ -604,6 +641,7 @@ from anymoment import (
     PermissionDeniedError,
     RateLimitError,
     ServerError,
+    SubscriptionRequiredError,
     UnprocessableError,
     ValidationError,
 )
@@ -644,7 +682,8 @@ MIT License - see [LICENSE](LICENSE) file for details.
 
 ## Support
 
-- **Python SDK & CLI docs**: [https://anymoment.sineways.tech/anymoment-python/docs](https://anymoment.sineways.tech/anymoment-python/docs)
+- **Python SDK & CLI docs**: [https://anymoment.sineways.tech/anymoment-python/docs?ref=pypi-readme](https://anymoment.sineways.tech/anymoment-python/docs?ref=pypi-readme)
+- **AnyMoment**: [https://anymoment.sineways.tech/?ref=pypi-readme](https://anymoment.sineways.tech/?ref=pypi-readme)
 - **API Base URL**: https://api.anymoment.sineways.tech
 - **Issues**: https://github.com/SinewaysTechnology/anymoment-python/issues
 
