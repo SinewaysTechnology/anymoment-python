@@ -72,6 +72,7 @@ anymoment events create "Weekly team meeting every Monday at 10 AM" \
 anymoment events list --calendar <calendar-id>
 
 # Get event instances. --from and --to are sent as start and end.
+# A date-only --to includes that day. The request uses the next day's date.
 anymoment events instances <event-id> --from "2026-01-01" --to "2026-03-31"
 ```
 
@@ -123,7 +124,7 @@ am events add --title "Month-end" --start 2026-01-30T09:00:00 \
 
 Outgoing subscriptions accept `event.created`, `event.updated`, `event.deleted`, and `occurrence.due`. A generated signing secret is returned once. `occurrence.due` is sent at the occurrence time plus `occurrence_offset_seconds` (within 7 days). The version 1 body is canonical JSON with sorted keys: `version`, `event_id`, `calendar_id`, `change_type`, `event`, and `occurrence_time`. `verify_webhook` checks hex HMAC-SHA256 of `{timestamp}.{raw body}` and rejects a timestamp more than 300 seconds off.
 
-`am events instances --from` and `--to` are the `start` and `end` query parameters on `GET /events/{id}/instances`.
+`am events instances --from` and `--to` are the `start` and `end` query parameters on `GET /events/{id}/instances`. A date-only `--to` includes that whole day. The API reads a date-only end as midnight at the start of the date, so the CLI and `get_event_instances` send the next day. A datetime is sent unchanged.
 
 If the account is not on Pro or an active trial, creating a subscription still succeeds and `paused_reason` is `subscription_required`. Deliveries stay paused. A hard gate is HTTP 403 with `required_tier`, mapped to `SubscriptionRequiredError`. HTTP 402 with code `subscription_required` is mapped the same way. The OpenAPI document does not declare 402. A call with no credential is HTTP 422 because `x-auth-token` is missing. A bad API key is HTTP 401 `invalid_api_key`.
 
@@ -377,7 +378,7 @@ anymoment events delete <id>
 # Toggle event active status
 anymoment events toggle <id>
 
-# Get event instances. --from and --to are the start and end query parameters.
+# Get event instances. A date-only --to includes that day (sent as the next day).
 anymoment events instances <id> [--from DATE] [--to DATE] [--optimized]
 
 # Get next instance
@@ -483,7 +484,7 @@ client = Client(
 - `client.update_event(event_id, name=None, description=None)` - Update event
 - `client.delete_event(event_id)` - Delete event
 - `client.toggle_event(event_id)` - Toggle event active status
-- `client.get_event_instances(event_id, from_date=None, to_date=None, optimized=False)` - Get event instances. The query names are `start` and `end`.
+- `client.get_event_instances(event_id, from_date=None, to_date=None, optimized=False)` - Get event instances. The query names are `start` and `end`. A date-only end includes that day and is sent as the next day. A datetime is unchanged.
 - `client.get_next_event_instance(event_id)` - Get next instance
 
 #### Agenda & Search

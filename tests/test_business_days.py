@@ -209,17 +209,23 @@ def test_create_event_sends_roll_and_calendar(mock_token_file):
     }
 
 
+def _query(url: str) -> dict[str, list[str]]:
+    from urllib.parse import parse_qs, urlsplit
+
+    return parse_qs(urlsplit(url).query)
+
+
 def test_instances_query_is_start_and_end(mock_token_file, monkeypatch):
     monkeypatch.setenv("ANYMOMENT_TOKEN", "test-token")
     client = Client(api_url=API, token="test-token")
     with responses.RequestsMock(assert_all_requests_are_fired=True) as rsps:
         rsps.add(responses.GET, f"{API}/events/{EVENT_ID}/instances", json=[], status=200)
         client.get_event_instances(EVENT_ID, from_date="2026-01-01", to_date="2026-06-30")
-        query = rsps.calls[0].request.url.split("?", 1)[1]
-    assert "start=2026-01-01" in query
-    assert "end=2026-06-30" in query
-    assert "from=" not in query
-    assert "to=" not in query
+        params = _query(rsps.calls[0].request.url)
+    assert params["start"] == ["2026-01-01"]
+    assert params["end"] == ["2026-07-01"]
+    assert "from" not in params
+    assert "to" not in params
     runner = CliRunner()
     with responses.RequestsMock(assert_all_requests_are_fired=True) as rsps:
         rsps.add(responses.GET, f"{API}/events/{EVENT_ID}/instances", json=[], status=200)
@@ -238,10 +244,64 @@ def test_instances_query_is_start_and_end(mock_token_file, monkeypatch):
                 "--json",
             ],
         )
-        query = rsps.calls[0].request.url.split("?", 1)[1]
+        params = _query(rsps.calls[0].request.url)
     assert result.exit_code == 0, result.output
-    assert "start=2026-01-01" in query
-    assert "end=2026-06-30" in query
+    assert params["start"] == ["2026-01-01"]
+    assert params["end"] == ["2026-07-01"]
+
+
+def test_inclusive_instance_end_keeps_datetimes():
+    from datetime import datetime
+
+    from anymoment.client import inclusive_instance_end
+
+    assert inclusive_instance_end("2027-02-31") == "2027-02-31"
+    assert inclusive_instance_end("2027-06-30T09:00:00+02:00") == "2027-06-30T09:00:00+02:00"
+    assert inclusive_instance_end(datetime(2027, 6, 30, 9, 0)) == datetime(2027, 6, 30, 9, 0)
+
+
+def test_date_only_instance_end_includes_that_day(mock_token_file):
+    from datetime import date, datetime
+
+    client = Client(api_url=API, token="test-token")
+    with responses.RequestsMock(assert_all_requests_are_fired=True) as rsps:
+        rsps.add(responses.GET, f"{API}/events/{EVENT_ID}/instances", json=[], status=200)
+        rsps.add(responses.GET, f"{API}/events/{EVENT_ID}/instances", json=[], status=200)
+        rsps.add(responses.GET, f"{API}/events/{EVENT_ID}/instances", json=[], status=200)
+        rsps.add(responses.GET, f"{API}/events/{EVENT_ID}/instances", json=[], status=200)
+        rsps.add(responses.GET, f"{API}/events/{EVENT_ID}/instances", json=[], status=200)
+        client.get_event_instances(EVENT_ID, to_date="2027-06-30")
+        client.get_event_instances(EVENT_ID, to_date=date(2027, 12, 31))
+        client.get_event_instances(EVENT_ID, to_date="2027-06-30T09:00:00")
+        client.get_event_instances(EVENT_ID, to_date="2027-06-30T00:00:00Z")
+        client.get_event_instances(EVENT_ID, to_date=datetime(2027, 6, 30, 9, 0))
+        ends = [_query(call.request.url)["end"][0] for call in rsps.calls]
+    assert ends[0] == "2027-07-01"
+    assert ends[1] == "2028-01-01"
+    assert ends[2] == "2027-06-30T09:00:00"
+    assert ends[3] == "2027-06-30T00:00:00Z"
+    assert ends[4].startswith("2027-06-30")
+    assert "2028" not in ends[4]
+    runner = CliRunner()
+    with responses.RequestsMock(assert_all_requests_are_fired=True) as rsps:
+        rsps.add(responses.GET, f"{API}/events/{EVENT_ID}/instances", json=[], status=200)
+        result = runner.invoke(
+            cli,
+            [
+                "events",
+                "instances",
+                EVENT_ID,
+                "--to",
+                "2027-06-30T09:00:00",
+                "--host",
+                API,
+                "--json",
+            ],
+            env={"ANYMOMENT_TOKEN": "test-token"},
+        )
+        sent = _query(rsps.calls[0].request.url)["end"][0]
+    assert result.exit_code == 0, result.output
+    assert sent == "2027-06-30T09:00:00"
 
 
 def test_cli_add_sends_roll_and_business_calendar(mock_token_file, monkeypatch):
@@ -329,6 +389,7 @@ def test_cli_help_mentions_business_days_and_occurrence_due():
     runner = CliRunner()
     events = runner.invoke(cli, ["events", "add", "--help"])
     preview = runner.invoke(cli, ["events", "business-days", "--help"])
+    listed = runner.invoke(cli, ["events", "instances", "--help"])
     hooks = runner.invoke(cli, ["calendars", "subscriptions", "create", "--help"])
     assert events.exit_code == 0
     assert "--business-day" in events.output
@@ -336,5 +397,8 @@ def test_cli_help_mentions_business_days_and_occurrence_due():
     assert "--roll" in events.output
     assert preview.exit_code == 0
     assert "Spain" in preview.output
+    assert listed.exit_code == 0
+    assert "next day" in listed.output
+    assert "datetime" in listed.output
     assert hooks.exit_code == 0
     assert "occurrence.due" in hooks.output

@@ -2048,15 +2048,27 @@ def toggle(event_id, host, raw):
         handle_api_error(e, "Toggle event")
 
 
+_INSTANCE_TO_HELP = (
+    "Window end, sent as end. A date (YYYY-MM-DD) includes that whole day. "
+    "The API reads a date-only end as midnight at the start of the date, so "
+    "a date is sent as the next day. A datetime is sent unchanged."
+)
+
+
 @events.command()
 @click.argument("event_id")
 @click.option("--from", "from_date", help="Window start. Sent as the start query parameter.")
-@click.option("--to", "to_date", help="Window end. Sent as the end query parameter.")
+@click.option("--to", "to_date", help=_INSTANCE_TO_HELP)
 @click.option("--optimized", is_flag=True, help="Return optimized format")
 @click.option("--host", "-h", help="API host URL")
 @click.option("--raw", is_flag=True, help="Output full JSON")
 def instances(event_id, from_date, to_date, optimized, host, raw):
-    """Get event instances. --from and --to are the start and end query parameters."""
+    """Get event instances. --from and --to are the start and end query parameters.
+
+    A date-only --to includes that whole day. The request sends the next day's
+    date, because the API treats a date-only end as midnight at the start of
+    the date. A datetime --to is sent unchanged.
+    """
     try:
         client = get_client(host)
         instances = client.get_event_instances(
@@ -2093,7 +2105,7 @@ def next(event_id, host, raw):
 @click.argument("event_id")
 @click.option("--format", "format_type", type=click.Choice(["ics", "csv"]), default="ics", help="Export format")
 @click.option("--from", "from_date", help="Window start. Sent as the start query parameter.")
-@click.option("--to", "to_date", help="Window end. Sent as the end query parameter.")
+@click.option("--to", "to_date", help=_INSTANCE_TO_HELP)
 @click.option("--out", "output_file", help="Output file path")
 @click.option("--host", "-h", help="API host URL")
 def export(event_id, format_type, from_date, to_date, output_file, host):

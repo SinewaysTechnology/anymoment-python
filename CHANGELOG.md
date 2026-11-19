@@ -10,6 +10,7 @@
 - `am events business-days` previews the dates locally. It does not call the API. Holiday dates come from `holidays` 0.57, the version pinned by the API. `GET /events/{id}/instances` still needs a token or an API key.
 - `Client.create_event` and `create_scheduled_event` send top-level `roll` and `business_calendar`.
 - `get_event_instances` sends `start` and `end`. CLI `--from` and `--to` are those query names. The old `from` and `to` query names are not in the API.
+- A date-only `end` includes that whole day. The API reads it as midnight at the start of the date, so `get_event_instances` and `am events instances --to` send the next day. Datetime values are unchanged.
 
 ### Webhooks
 
